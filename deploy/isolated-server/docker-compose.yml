@@ -1,6 +1,6 @@
 services:
   app:
-    image: ${TSP_IMAGE:-ghcr.io/hua329/tick-stock-panel:latest}
+    image: ${TSP_IMAGE:-ghcr.io/hamizdev/tick-stock-panel:latest}
     container_name: tick-stock-panel
     ports:
       - "127.0.0.1:${TSP_HOST_PORT:-3018}:3018"
