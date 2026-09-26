@@ -159,6 +159,150 @@ def _normalize_bare_symbols(
     return out, resolved, skipped
 
 
+_DAILY_RETRY_ATTEMPTS = 3
+_DAILY_DEGRADED_BATCH_SIZE = 20
+
+
+def _fetch_daily_raw(
+    tf,
+    symbols: list[str],
+    *,
+    count: int | None,
+    start_time: datetime | None,
+    end_time: datetime | None,
+):
+    """Fetch one TickFlow daily-kline request without converting the payload."""
+    if start_time and end_time:
+        return tf.klines.batch(
+            symbols,
+            period="1d",
+            adjust="none",
+            start_time=_datetime_to_ms(start_time),
+            end_time=_datetime_to_ms(end_time),
+            count=10000,
+            as_dataframe=False,
+            show_progress=False,
+        )
+    return tf.klines.batch(
+        symbols,
+        period="1d",
+        count=count or 250,
+        adjust="none",
+        as_dataframe=False,
+        show_progress=False,
+    )
+
+
+def _daily_raw_to_frame(raw) -> pl.DataFrame:
+    """Convert one raw TickFlow daily payload to the canonical daily schema."""
+    seg = _compact_klines_to_df(raw)
+    if seg.is_empty():
+        return pl.DataFrame()
+    seg = (
+        seg.with_columns(
+            _timestamp_to_beijing_datetime(pl.col("timestamp")).alias("datetime")
+        )
+        .drop("timestamp")
+    )
+    return _normalize_daily(seg)
+
+
+def _fetch_daily_chunk_resilient(
+    tf,
+    symbols: list[str],
+    *,
+    count: int | None,
+    start_time: datetime | None,
+    end_time: datetime | None,
+) -> tuple[pl.DataFrame, list[str]]:
+    """Fetch+convert one logical daily chunk with retry and bounded degradation.
+
+    TickFlow compact payloads can occasionally trigger transient Polars
+    dtype-inference TypeErrors during DataFrame construction. Retrying the same
+    request has been observed to succeed. After repeated conversion failures,
+    degrade a large request to 20-symbol sub-batches so one malformed payload
+    cannot abort the whole market sync.
+    """
+    last_stage = "fetch"
+    last_error: Exception | None = None
+
+    for attempt in range(1, _DAILY_RETRY_ATTEMPTS + 1):
+        try:
+            raw = _fetch_daily_raw(
+                tf,
+                symbols,
+                count=count,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_stage = "fetch"
+            last_error = exc
+            logger.warning(
+                "daily batch fetch failed for %d symbols (attempt %d/%d): %s",
+                len(symbols),
+                attempt,
+                _DAILY_RETRY_ATTEMPTS,
+                exc,
+            )
+        else:
+            try:
+                return _daily_raw_to_frame(raw), []
+            except Exception as exc:  # noqa: BLE001
+                last_stage = "convert"
+                last_error = exc
+                logger.warning(
+                    "daily batch conversion failed for %d symbols (attempt %d/%d): %s",
+                    len(symbols),
+                    attempt,
+                    _DAILY_RETRY_ATTEMPTS,
+                    exc,
+                )
+
+        if attempt < _DAILY_RETRY_ATTEMPTS:
+            time.sleep(min(attempt, 2))
+
+    # Only conversion failures benefit from smaller payloads. Keep the fallback
+    # bounded to ceil(N/20) extra requests; persistent network failures are not
+    # fanned out into many more requests.
+    if last_stage == "convert" and len(symbols) > _DAILY_DEGRADED_BATCH_SIZE:
+        logger.warning(
+            "daily batch degraded to %d-symbol sub-batches after repeated conversion failure: %s",
+            _DAILY_DEGRADED_BATCH_SIZE,
+            last_error,
+        )
+        frames: list[pl.DataFrame] = []
+        failed: list[str] = []
+        for sub in chunked(symbols, _DAILY_DEGRADED_BATCH_SIZE):
+            try:
+                raw = _fetch_daily_raw(
+                    tf,
+                    sub,
+                    count=count,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+                frame = _daily_raw_to_frame(raw)
+                if not frame.is_empty():
+                    frames.append(frame)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "daily degraded sub-batch failed for %d symbols: %s",
+                    len(sub),
+                    exc,
+                )
+                failed.extend(sub)
+
+        merged = (
+            pl.concat(frames, how="diagonal_relaxed")
+            if frames
+            else pl.DataFrame()
+        )
+        return merged, failed
+
+    return pl.DataFrame(), list(symbols)
+
+
 def sync_daily_batch(symbols: list[str],
                      count: int | None = None,
                      batch_size: int | None = None,
@@ -172,8 +316,8 @@ def sync_daily_batch(symbols: list[str],
     优先使用 start_time / end_time 区间 + count=10000,确保覆盖完整时间段。
     仅传 count 时按条数回溯。
 
-    failed_out: 可选出参。拉取失败的分块标的会追加进该 list, 供上层判定「部分失败」
-                而非静默当成功(某分块断网 → 这些标的本轮未更新, 保持旧数据)。
+    failed_out: 可选出参。重试/降级后仍失败的标的会追加进该 list,供上层判定
+                「部分失败」而非静默当成功。单批转换异常不会再中断整个同步任务。
     """
     tf = get_client()
     out: list[pl.DataFrame] = []
@@ -182,46 +326,36 @@ def sync_daily_batch(symbols: list[str],
 
     for i, chunk in enumerate(chunks):
         sleep_between_batches(i, rpm)
-        try:
-            if start_time and end_time:
-                raw = tf.klines.batch(
-                    chunk, period="1d", adjust="none",
-                    start_time=_datetime_to_ms(start_time),
-                    end_time=_datetime_to_ms(end_time),
-                    count=10000,
-                    as_dataframe=False, show_progress=False,
-                )
-            else:
-                raw = tf.klines.batch(chunk, period="1d", count=count or 250, adjust="none",
-                                      as_dataframe=False, show_progress=False)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("batch fetch failed for %d symbols (chunk %d/%d): %s",
-                           len(chunk), i + 1, len(chunks), e)
-            failed_syms.extend(chunk)
-            continue
+        frame, failed = _fetch_daily_chunk_resilient(
+            tf,
+            chunk,
+            count=count,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        if not frame.is_empty():
+            out.append(frame)
+        if failed:
+            failed_syms.extend(failed)
 
-        # False 直转: timestamp(UTC 毫秒) → 北京墙钟 datetime 列,
-        # _normalize_daily 将 datetime 映射为 date — 与 SDK True 路径的
-        # trade_date 字符串列同口径 (fromtimestamp(ts/1000, Asia/Shanghai))。
-        seg = _compact_klines_to_df(raw)
-        if not seg.is_empty():
-            seg = seg.with_columns(_timestamp_to_beijing_datetime(pl.col("timestamp")).alias("datetime")).drop("timestamp")
-            out.append(_normalize_daily(seg))
-
+        # A logical chunk is done even if some symbols still failed after
+        # retry/degradation; otherwise the pipeline progress appears frozen.
         if on_chunk_done:
             on_chunk_done(i + 1, len(chunks))
 
-    # 部分失败可见化: 聚合一条 WARNING(而非只有逐块 debug/warning), 并回传出参。
     if failed_syms:
-        logger.warning("日K批量同步部分失败: %d/%d 标的未获取, 本轮保持旧数据 (样例: %s)",
-                       len(failed_syms), len(symbols), failed_syms[:10])
+        logger.warning(
+            "日K批量同步部分失败: %d/%d 标的未获取, 本轮保持旧数据 (样例: %s)",
+            len(failed_syms),
+            len(symbols),
+            failed_syms[:10],
+        )
         if failed_out is not None:
             failed_out.extend(failed_syms)
 
     if not out:
         return pl.DataFrame()
     return pl.concat(out, how="diagonal_relaxed")
-
 
 def sync_and_persist_daily_batch(
     symbols: list[str],
