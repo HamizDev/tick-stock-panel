@@ -87,6 +87,11 @@ def test_custom_realtime_provider_minimum_interval_is_respected(monkeypatch):
 
     assert quote_service.QuoteService._tier_min_interval() == 15.0
 
+    monkeypatch.setattr(preferences, "load", lambda: {})
+    service = quote_service.QuoteService()
+    service._interval = 6.0  # e.g. service already running before provider switch
+    assert service._effective_interval() == 15.0
+
 
 def test_unverifiable_realtime_snapshot_fails_closed_for_final(monkeypatch):
     monkeypatch.setattr(preferences, "load", lambda: {})
