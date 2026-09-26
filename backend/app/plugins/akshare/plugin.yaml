@@ -1,0 +1,10 @@
+# AKShare — free public-data aggregation plugin (optional dependency)
+name: akshare
+display_name: "AKShare"
+runtime: python
+entry: app.plugins.akshare.provider:AkShareProvider
+check: app.plugins.akshare.provider:availability
+datasets: [daily, realtime]
+description: "免费公开数据聚合源。第一阶段提供沪深京 A 股/ETF 不复权日K与全市场实时快照；无需 API Key。默认不自动切换，需在数据源设置中显式选择。"
+install_hint: "点击安装依赖即可使用；无需 API Key。公开网页接口可能因上游限流或结构调整短时不可用，建议保留 TickFlow/其他源作为回退。"
+homepage: "https://akshare.akfamily.xyz/"
