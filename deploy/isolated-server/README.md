@@ -29,7 +29,7 @@ The profile also intentionally does **not** mount the server's `~/.codex` direct
 
 ## First deployment
 
-1. Enable GitHub Actions in the fork and build `ghcr.io/hua329/tick-stock-panel:latest` in GitHub's runners.
+1. Enable GitHub Actions in the fork and build `ghcr.io/hamizdev/tick-stock-panel:latest` in GitHub's runners.
 2. On the server, perform read-only reconnaissance first. If any Orvia/Fund unit is failed, stop.
 3. Copy this repository under `/opt/tick-stock-panel/app` or copy only this deployment profile there.
 4. Create `/opt/tick-stock-panel/data`.
@@ -44,7 +44,7 @@ The profile also intentionally does **not** mount the server's `~/.codex` direct
 7. If preflight passes, pull and start:
 
    ```bash
-   docker pull ghcr.io/hua329/tick-stock-panel:latest
+   docker pull ghcr.io/hamizdev/tick-stock-panel:latest
    docker compose --env-file /opt/tick-stock-panel/.env \
      -f /opt/tick-stock-panel/app/deploy/isolated-server/docker-compose.yml up -d
    ```
@@ -76,7 +76,7 @@ Do not add Nginx, TLS or public routes during the first validation stage.
 Build/publish the fork image in GitHub Actions, then on the server:
 
 ```bash
-docker pull ghcr.io/hua329/tick-stock-panel:latest
+docker pull ghcr.io/hamizdev/tick-stock-panel:latest
 docker compose --env-file /opt/tick-stock-panel/.env \
   -f /opt/tick-stock-panel/app/deploy/isolated-server/docker-compose.yml up -d
 ```
