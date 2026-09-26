@@ -137,3 +137,17 @@ def test_daily_routes_stock_and_etf_to_unadjusted_akshare_endpoints(monkeypatch)
             },
         ),
     ]
+
+
+def test_trading_days_normalizes_dates(monkeypatch):
+    fake = SimpleNamespace(
+        tool_trade_date_hist_sina=lambda: pl.DataFrame(
+            {"trade_date": [date(2026, 9, 24), "2026-09-25"]}
+        )
+    )
+    monkeypatch.setattr(ak_provider, "_ak", lambda: fake)
+
+    assert ak_provider.AkShareProvider().trading_days() == {
+        date(2026, 9, 24),
+        date(2026, 9, 25),
+    }
