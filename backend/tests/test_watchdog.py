@@ -31,7 +31,7 @@ async def _run_watchdog(probe_results, *, threshold=2, interval=0.01, timeout=0.
         await asyncio.sleep(0.02)
         if exits or wd._task.done():
             break
-    await wd.stop()
+    await asyncio.wait_for(wd.stop(), timeout=2)
     return exits
 
 

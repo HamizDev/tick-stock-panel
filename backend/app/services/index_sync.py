@@ -112,6 +112,64 @@ def _fetch_instruments_by_type(instrument_type: str, asset_type_label: str) -> p
     )
 
 
+
+def _annotate_etf_instruments(df: pl.DataFrame) -> pl.DataFrame:
+    """Annotate ETF instrument rows with market-data eligibility.
+
+    SSE ETF code groups include non-trading auxiliary codes for subscription/
+    allocation/cash handling. They share the ETF instrument type upstream but do
+    not have secondary-market K-lines. Preserve them in the raw instrument table
+    for traceability, while marking them ineligible for daily market-data sync.
+
+    Shenzhen 158/159 codes are not filtered by prefix or suffix here because those
+    ranges contain normal tradable ETFs; without lifecycle fields from the source,
+    newly offered/pre-listing SZ ETFs remain eligible and may legitimately return
+    zero rows until listing.
+    """
+    if df.is_empty() or "symbol" not in df.columns:
+        return df
+
+    symbol = pl.col("symbol").cast(pl.Utf8)
+    code = (
+        pl.col("code").cast(pl.Utf8)
+        if "code" in df.columns
+        else symbol.str.split(".").list.first()
+    )
+    name = (
+        pl.col("name").cast(pl.Utf8).fill_null("")
+        if "name" in df.columns
+        else pl.lit("")
+    )
+    exchange = symbol.str.split(".").list.last()
+    sse_aux = (exchange == "SH") & (
+        code.str.ends_with("3") | code.str.ends_with("4")
+    )
+    named_aux = name.str.contains("认购款", literal=True)
+    auxiliary = sse_aux | named_aux
+
+    return df.with_columns([
+        exchange.alias("exchange"),
+        pl.when(auxiliary)
+        .then(pl.lit("subscription_aux"))
+        .otherwise(pl.lit("market"))
+        .alias("instrument_role"),
+        (~auxiliary).alias("market_data_eligible"),
+    ])
+
+
+def _eligible_etf_symbols(instruments: pl.DataFrame) -> list[str]:
+    """Return symbols that should be queried for secondary-market ETF K-lines."""
+    if instruments.is_empty() or "symbol" not in instruments.columns:
+        return []
+    annotated = _annotate_etf_instruments(instruments)
+    return sorted(set(
+        annotated
+        .filter(pl.col("market_data_eligible"))
+        ["symbol"]
+        .cast(pl.Utf8)
+        .to_list()
+    ))
+
 def sync_index_instruments(
     repo: KlineRepository,
     pull_index: bool = True,
@@ -168,6 +226,7 @@ def sync_index_instruments(
     if etf_parts:
         etf_inst = pl.concat(etf_parts, how="diagonal_relaxed").unique(subset=["symbol"], keep="last").sort("symbol")
         if not etf_inst.is_empty():
+            etf_inst = _annotate_etf_instruments(etf_inst)
             repo.save_etf_instruments(etf_inst)
             total += etf_inst.height
 
@@ -184,6 +243,7 @@ def sync_etf_instruments(repo: KlineRepository) -> int:
     etf_df = _fetch_instruments_by_type("etf", "etf")
     if etf_df.is_empty():
         return 0
+    etf_df = _annotate_etf_instruments(etf_df)
     repo.save_etf_instruments(etf_df)
     repo.refresh_index_views()
     return etf_df.height
@@ -351,7 +411,7 @@ def sync_and_persist_etf_daily(
             instruments = repo.get_etf_instruments()
         if instruments.is_empty() or "symbol" not in instruments.columns:
             return 0
-        symbols = sorted(set(instruments["symbol"].to_list()))
+        symbols = _eligible_etf_symbols(instruments)
     if not symbols:
         return 0
 

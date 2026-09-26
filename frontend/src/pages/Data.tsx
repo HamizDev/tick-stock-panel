@@ -335,6 +335,11 @@ export function Data() {
     symbols_covered: s.etf_daily?.symbols_covered ?? s.etf_instruments?.rows ?? 0,
     trading_days: s.etf_daily?.trading_days ?? s.etf_enriched?.trading_days ?? 0,
   } : null
+  const etfEligibleSymbols = s?.etf_instruments?.market_data_eligible ?? s?.etf_instruments?.rows ?? 0
+  const etfAuxiliarySymbols = s?.etf_instruments?.auxiliary_symbols ?? 0
+  const etfOverviewLabel = s
+    ? `日K ${s.etf_daily?.symbols_covered ?? 0} / 行情候选 ${etfEligibleSymbols}${etfAuxiliarySymbols ? ` · 辅助代码 ${etfAuxiliarySymbols}` : ''}`
+    : undefined
   const indexOverviewLabel = s ? '日 · 维表 · 日K · 指标' : undefined
   const indexEarliestDate = s?.index_daily?.earliest_date ?? s?.index_enriched?.earliest_date ?? null
   const indexOffsetDays = indexExtendUnit === 'month' ? indexExtendValue * 30 : indexExtendValue * 365
@@ -515,7 +520,7 @@ export function Data() {
             capLimits={mergedCaps}
             customProvider={routeProviderDisplay(matrix.data, 'daily')}
             auto={etfAuto}
-            subLabel="维表 · 日K · 指标"
+            subLabel={etfOverviewLabel}
             fieldTabs={[
               { label: '维表', table: 'etf_instruments' },
               { label: '日K', table: 'etf_daily' },

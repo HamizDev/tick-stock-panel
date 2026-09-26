@@ -267,32 +267,37 @@ def _safe_aggregate_index_instruments(repo) -> dict | None:
 
 
 def _safe_aggregate_etf_instruments(repo) -> dict | None:
-    """ETF instruments 统计 — 优先独立 instruments_etf，兼容旧 instruments_index。"""
-    queries = [
-        """SELECT count(*) AS rows,
-                  count(DISTINCT symbol) AS symbols,
-                  count_if(name IS NOT NULL AND name != '') AS named
-           FROM instruments_etf""",
-        """SELECT count(*) AS rows,
-                  count(DISTINCT symbol) AS symbols,
-                  count_if(name IS NOT NULL AND name != '') AS named
-           FROM instruments_index
-           WHERE asset_type = 'etf'""",
-    ]
-    for sql in queries:
-        try:
-            row = repo.execute_one(sql)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("aggregate etf instruments fallback failed: %s", e)
-            continue
-        if row and row[0]:
-            return {
-                "rows": int(row[0]),
-                "symbols_covered": int(row[1] or 0),
-                "latest_as_of": None,
-                "named": int(row[2] or 0),
-            }
-    return None
+    """ETF instruments 统计，区分二级市场标的与发行/认购辅助代码。"""
+    import polars as pl
+
+    try:
+        instruments = repo.get_etf_instruments()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("aggregate etf instruments failed: %s", e)
+        return None
+    if instruments.is_empty() or "symbol" not in instruments.columns:
+        return None
+
+    # 旧 parquet 没有 instrument_role/market_data_eligible 时也动态补标，
+    # 无需用户先重同步维表，数据页就能按当前规则展示真实覆盖口径。
+    from app.services.index_sync import _annotate_etf_instruments
+    annotated = _annotate_etf_instruments(instruments)
+    named = 0
+    if "name" in annotated.columns:
+        named = annotated.select(
+            pl.col("name").cast(pl.Utf8).fill_null("").ne("").sum()
+        ).item()
+
+    eligible = annotated.filter(pl.col("market_data_eligible")).height
+    auxiliary = annotated.filter(~pl.col("market_data_eligible")).height
+    return {
+        "rows": annotated.height,
+        "symbols_covered": annotated["symbol"].n_unique(),
+        "latest_as_of": None,
+        "named": int(named or 0),
+        "market_data_eligible": int(eligible),
+        "auxiliary_symbols": int(auxiliary),
+    }
 
 
 def _safe_aggregate_etf_enriched(repo) -> dict | None:
@@ -781,6 +786,9 @@ _TABLE_FIELD_DESC: dict[str, dict[str, str]] = {
         "name": "ETF名称",
         "code": "ETF编码(纯数字)",
         "asset_type": "资产类型(etf)",
+        "exchange": "交易所(SH/SZ/BJ)",
+        "instrument_role": "标的角色(market/subscription_aux)",
+        "market_data_eligible": "是否应拉取二级市场行情",
         "source": "数据源",
     },
 }

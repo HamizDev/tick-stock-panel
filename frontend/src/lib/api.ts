@@ -4011,6 +4011,8 @@ interface InstrumentsStats {
   symbols_covered: number
   latest_as_of: string | null
   named: number
+  market_data_eligible?: number
+  auxiliary_symbols?: number
 }
 
 export interface DataStatus {

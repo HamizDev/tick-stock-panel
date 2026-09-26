@@ -72,6 +72,8 @@ class HealthWatchdog:
                     asyncio.to_thread(self._probe), timeout=self._probe_timeout_s
                 )
                 self._consecutive_failures = 0
+            except asyncio.CancelledError:
+                raise
             except BaseException as exc:  # 探测任何异常都算失败 (含 to_thread 超时)
                 self._consecutive_failures += 1
                 logger.error(
