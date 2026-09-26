@@ -268,6 +268,8 @@ def _safe_aggregate_index_instruments(repo) -> dict | None:
 
 def _safe_aggregate_etf_instruments(repo) -> dict | None:
     """ETF instruments 统计，区分二级市场标的与发行/认购辅助代码。"""
+    import polars as pl
+
     try:
         instruments = repo.get_etf_instruments()
     except Exception as e:  # noqa: BLE001
