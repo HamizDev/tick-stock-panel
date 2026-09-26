@@ -1,0 +1,39 @@
+name: AKShare plugin validation
+
+on:
+  pull_request:
+    paths:
+      - 'backend/app/plugins/akshare/**'
+      - '.github/workflows/akshare-plugin-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  import-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.16'
+      - name: Install pinned AKShare plugin dependency
+        run: python -m pip install -r backend/app/plugins/akshare/requirements.txt
+      - name: Verify required AKShare interfaces exist
+        run: |
+          python - <<'PY'
+          import akshare as ak
+
+          required = [
+              "stock_zh_a_hist",
+              "fund_etf_hist_em",
+              "stock_zh_a_spot_em",
+              "fund_etf_spot_em",
+              "tool_trade_date_hist_sina",
+          ]
+          missing = [name for name in required if not callable(getattr(ak, name, None))]
+          if missing:
+              raise SystemExit(f"missing AKShare interfaces: {missing}")
+          print("AKShare interface contract OK")
+          PY
