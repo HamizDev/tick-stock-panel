@@ -28,6 +28,11 @@ def _clean_cache():
 def _no_probes(monkeypatch):
     """探测函数替换为爆炸 — 用于验证未被打到。"""
     monkeypatch.setattr(trading_day, "_probe_fuyao", lambda now: (_ for _ in ()).throw(AssertionError("不应探测")))
+    monkeypatch.setattr(
+        trading_day,
+        "_probe_selected_provider_calendar",
+        lambda now: (_ for _ in ()).throw(AssertionError("不应探测")),
+    )
     monkeypatch.setattr(trading_day, "_probe_tickflow", lambda now: (_ for _ in ()).throw(AssertionError("不应探测")))
 
 
@@ -57,13 +62,27 @@ def test_fuyao_calendar_is_authoritative_even_before_open(monkeypatch):
 def test_chain_falls_through_to_tickflow_when_fuyao_unknown(monkeypatch):
     monday = datetime(2026, 9, 7, 10, 0, tzinfo=CN)
     monkeypatch.setattr(trading_day, "_probe_fuyao", lambda now: None)
+    monkeypatch.setattr(trading_day, "_probe_selected_provider_calendar", lambda now: None)
     monkeypatch.setattr(trading_day, "_probe_tickflow", lambda now: True)
     assert is_trading_day(monday) is True
+
+
+def test_selected_plugin_calendar_precedes_tickflow(monkeypatch):
+    monday = datetime(2026, 9, 7, 10, 0, tzinfo=CN)
+    monkeypatch.setattr(trading_day, "_probe_fuyao", lambda now: None)
+    monkeypatch.setattr(trading_day, "_probe_selected_provider_calendar", lambda now: False)
+    monkeypatch.setattr(
+        trading_day,
+        "_probe_tickflow",
+        lambda now: (_ for _ in ()).throw(AssertionError("插件日历已有结论")),
+    )
+    assert is_trading_day(monday) is False
 
 
 def test_all_probes_unknown_returns_none(monkeypatch):
     monday = datetime(2026, 9, 7, 10, 0, tzinfo=CN)
     monkeypatch.setattr(trading_day, "_probe_fuyao", lambda now: None)
+    monkeypatch.setattr(trading_day, "_probe_selected_provider_calendar", lambda now: None)
     monkeypatch.setattr(trading_day, "_probe_tickflow", lambda now: None)
     assert is_trading_day(monday) is None
 
@@ -276,3 +295,38 @@ def test_unknown_verdict_is_cached_within_short_ttl(monkeypatch):
     assert is_trading_day(monday) is None
     assert is_trading_day(monday) is None
     assert calls == {"fuyao": 1, "tickflow": 1}
+
+
+def test_selected_provider_calendar_ignores_stale_future_gap(monkeypatch):
+    now = datetime(2026, 9, 7, 10, 0, tzinfo=CN)
+    from app.data_providers import custom as custom_sources
+    from app.services import preferences
+
+    provider = type(
+        "P",
+        (),
+        {"trading_days": lambda self: {date(2026, 9, 4)}},
+    )()
+    monkeypatch.setattr(preferences, "get_realtime_data_provider", lambda: "akshare")
+    monkeypatch.setattr(custom_sources, "is_custom_provider", lambda name: True)
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: provider)
+
+    assert trading_day._probe_selected_provider_calendar(now) is None
+
+
+def test_selected_provider_calendar_can_confirm_holiday_when_current(monkeypatch):
+    now = datetime(2026, 9, 7, 10, 0, tzinfo=CN)
+    from app.data_providers import custom as custom_sources
+    from app.services import preferences
+
+    # Calendar reaches beyond today but intentionally omits Monday 9/7.
+    provider = type(
+        "P",
+        (),
+        {"trading_days": lambda self: {date(2026, 9, 4), date(2026, 9, 8)}},
+    )()
+    monkeypatch.setattr(preferences, "get_realtime_data_provider", lambda: "akshare")
+    monkeypatch.setattr(custom_sources, "is_custom_provider", lambda name: True)
+    monkeypatch.setattr(custom_sources, "get_provider", lambda name: provider)
+
+    assert trading_day._probe_selected_provider_calendar(now) is False

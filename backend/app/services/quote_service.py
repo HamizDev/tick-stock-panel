@@ -253,6 +253,9 @@ class QuoteService:
         self._final_sync_failed: dict[tuple[date, str], str] = {}
         # 最近一次 final 定版拉取是否取得边界后快照 (None=非 final 拉取)
         self._last_final_confirmed: bool | None = None
+        # 某些免费源没有可信逐笔/快照时间戳。final 阶段仍可刷新展示，但不能
+        # 证明价格已跨过午休/收盘边界，因此不允许落盘，交给盘后权威日线校正。
+        self._last_final_unverifiable = False
         self._holiday_active = False  # 交易日探针当前是否判休市 (日志去重)
         # 轮询放量 (volume_delta 规则): 上一轮全市场股票快照的 (累计成交量[手], 累计成交额[元])。
         # 每轮全量快照后更新 (含非连续竞价时段, 保证 13:00 恢复时 prev 是 12:59
@@ -493,16 +496,32 @@ class QuoteService:
 
     @classmethod
     def _tier_min_interval(cls) -> float:
-        # 实时源路由到插件/自定义源时, TickFlow 档位限速不适用 (中立能力原则):
-        # 下限放宽到通用 1s, 默认/已保存间隔不变
+        # 实时源路由到插件/自定义源时, TickFlow 档位限速不适用 (中立能力原则)。
+        # 插件可声明更保守的 min_realtime_interval，避免对公开网页接口高频轮询。
         from app.services import preferences
-        if preferences.get_realtime_data_provider() != "tickflow":
-            return cls.CUSTOM_PROVIDER_MIN_INTERVAL
+        provider_name = preferences.get_realtime_data_provider()
+        if provider_name != "tickflow":
+            floor = cls.CUSTOM_PROVIDER_MIN_INTERVAL
+            try:
+                from app.data_providers import custom as custom_sources
+                if custom_sources.provider_has_dataset(provider_name, "realtime"):
+                    provider = custom_sources.get_provider(provider_name)
+                    declared = float(getattr(provider, "min_realtime_interval", floor))
+                    floor = max(floor, declared)
+            except (TypeError, ValueError):
+                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("读取实时源最小轮询间隔失败(%s): %s", provider_name, e)
+            return min(cls.MAX_INTERVAL, floor)
         tier = cls._current_tier()
         return cls.TIER_MIN_INTERVAL.get(tier, cls.DEFAULT_INTERVAL)
 
     def _clamp_interval(self, interval: float) -> float:
         return max(self._tier_min_interval(), min(self.MAX_INTERVAL, interval))
+
+    def _effective_interval(self) -> float:
+        """Apply the currently selected provider's floor without requiring a restart."""
+        return max(self._interval, self._tier_min_interval())
 
     # ================================================================
     # 行情数据访问
@@ -563,7 +582,7 @@ class QuoteService:
             "paused": self._paused,
             "mode": mode,
             "realtime_allowed": mode != "none",
-            "interval_s": self._interval,
+            "interval_s": self._effective_interval(),
             "symbol_count": self._symbol_count,
             "index_symbol_count": self._index_symbol_count,
             "etf_symbol_count": self._etf_symbol_count,
@@ -615,6 +634,16 @@ class QuoteService:
                                 self._final_sync_done.add(key)
                                 self._final_sync_failed.pop(key, None)
                                 logger.info("%s 最终行情同步完成 (快照时间戳已达边界), 进入休盘态", label)
+                            elif key and ok and self._last_final_unverifiable:
+                                # 免费网页源可能不给可信快照时间戳。此时 _process_full_market_records
+                                # 已 fail-closed 跳过落盘；继续重试只会高频请求同一公开接口。
+                                self._final_sync_done.add(key)
+                                self._final_sync_failed[key] = "unverifiable_snapshot"
+                                logger.warning(
+                                    "%s 实时源无可信快照时间戳, 不做 final 落盘并停止重试; "
+                                    "当日分区交由盘后日线管道校正",
+                                    label,
+                                )
                             elif key and self._past_final_deadline(phase):
                                 # 重试窗口结束仍未取得边界后快照: 接受现状停止轮询。
                                 # 实测有实时源收盘后长期返回竞价前旧价 (快照时间戳可信但价格不更新),
@@ -639,8 +668,12 @@ class QuoteService:
             except Exception as e:  # noqa: BLE001
                 logger.warning("行情轮询异常: %s", e)
 
+            # Provider may be switched while the service is already running.
+            # Re-evaluate its floor every loop so a public endpoint is never polled
+            # faster than the plugin declares merely because the old source allowed it.
+            wait_interval = self._effective_interval()
             waited = 0.0
-            while self._running and self._enabled and waited < self._interval:
+            while self._running and self._enabled and waited < wait_interval:
                 time.sleep(0.5)
                 waited += 0.5
 
@@ -652,6 +685,7 @@ class QuoteService:
         """
         with self._fetch_lock:
             before = self._fetched_at
+            self._last_final_unverifiable = False
             if final:
                 logger.info("最终行情同步开始")
             self._fetch_full_market_quotes(final_boundary_ms=final_boundary_ms)
@@ -670,6 +704,11 @@ class QuoteService:
                     now_ts = time.perf_counter()
                     provider = custom_sources.get_provider(provider_name)
                     records = provider.get_realtime()
+                    if (
+                        final_boundary_ms is not None
+                        and getattr(provider, "snapshot_timestamp_reliable", True) is False
+                    ):
+                        self._last_final_unverifiable = True
                     # 指数补充: A 股快照通常不含指数。插件可选实现
                     # get_realtime_indices(symbols) 用独立端点补拉 (如 fuyao 指数快照);
                     # 未实现的源指数缓存为空, 由日K兜底接管。

@@ -7,12 +7,14 @@
 探测链 (按确定性排序, 先到先得):
   1. fuyao 交易日历 (已配置 fuyao 时): GET /api/a-share/calendar/trading-days,
      今天在近一年交易日列表内 ⇔ 交易日。权威日历, 无时段依赖, 无开盘缓冲问题。
-  2. tickflow 实时行情时间戳: 拉一篮流动性票快照 (单请求), max(timestamp)
+  2. 当前选中的插件如提供 trading_days() (例如 AKShare), 用其交易日历。
+     只有当日历覆盖到今天时才采信“不在列表内=休市”; 上游日历过期则返回未知。
+  3. tickflow 实时行情时间戳: 拉一篮流动性票快照 (单请求), max(timestamp)
      日期 == 今天 ⇔ 交易日。非交易日全市场戳停在上一交易日 (2026-08-29 周六
      实测 5551/5551, 含停牌股 — 戳是快照定版时刻, 非最后成交时刻);
      交易日集合竞价阶段 (9:15-9:30) 戳是否已翻新未实测 → 开盘缓冲窗内
      戳过期不作数, 保守视为未知。
-  3. 均不可用 → None: 调用方按周几近似继续。
+  4. 均不可用 → None: 调用方按周几近似继续。
 
 安全约束:
   - 周末直接返回 False (周几判断零成本, 不打任何请求)。
@@ -78,6 +80,34 @@ def _probe_fuyao(now: datetime) -> bool | None:
         return None
 
 
+def _probe_selected_provider_calendar(now: datetime) -> bool | None:
+    """Use the selected realtime plugin's trading calendar when it covers today.
+
+    A stale calendar must never turn all future weekdays into false holidays. Only a
+    calendar whose max date reaches today is authoritative for a negative verdict.
+    """
+    try:
+        from app.data_providers import custom as custom_sources
+        from app.services import preferences
+
+        name = preferences.get_realtime_data_provider()
+        if name in {"tickflow", "fuyao"} or not custom_sources.is_custom_provider(name):
+            return None
+        provider = custom_sources.get_provider(name)
+        fetch_days = getattr(provider, "trading_days", None)
+        if not callable(fetch_days):
+            return None
+        days = set(fetch_days() or ())
+        if not days:
+            return None
+        latest = max(days)
+        if latest < now.date():
+            return None
+        return now.date() in days
+    except Exception:  # noqa: BLE001 — 插件日历失败按未知处理
+        return None
+
+
 def _probe_tickflow(now: datetime) -> bool | None:
     """tickflow 行情时间戳: max(timestamp) 日期 == 今天 ⇔ 交易日。
 
@@ -123,6 +153,8 @@ def is_trading_day(now: datetime | None = None) -> bool | None:
             return _CACHE.verdict
 
     verdict = _probe_fuyao(now)
+    if verdict is None:
+        verdict = _probe_selected_provider_calendar(now)
     if verdict is None:
         verdict = _probe_tickflow(now)
 

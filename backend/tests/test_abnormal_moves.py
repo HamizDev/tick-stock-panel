@@ -11,6 +11,8 @@ from app.indicators.pipeline import (
     benchmark_momentum_today,
     load_benchmark_momentum,
 )
+from app.market_time import cn_today
+
 from app.services.abnormal_moves import (
     _bench_rt_pct,
     _hist_cache,
@@ -120,7 +122,7 @@ def test_benchmark_momentum_today_percent_not_treated_as_decimal(tmp_path) -> No
 
 def test_benchmark_momentum_today_excludes_today_rows(tmp_path) -> None:
     # 指数监控盘写入的今日行不能当昨收 (否则实时涨跌被重复叠加)
-    today = date.today()
+    today = cn_today()
     rows = [("000001.SH", d, 10.0 + i) for i, d in enumerate(_BENCH_DAYS)]
     rows.append(("000001.SH", today, 99.0))  # 今日脏行
     _write_index_daily(tmp_path, rows)

@@ -387,6 +387,35 @@ def sync_etf_adj_factor(
     )
 
 
+def _persist_etf_daily_chunk(
+    repo: KlineRepository,
+    raw: pl.DataFrame,
+    factors: pl.DataFrame,
+) -> int:
+    """落一批 ETF 原始日K，并用完整本地历史重算该批前复权 enriched。"""
+    if raw.is_empty() or "symbol" not in raw.columns:
+        return 0
+
+    repo.append_etf_daily(raw)
+    symbols = raw["symbol"].cast(pl.Utf8).unique().to_list()
+    batch_factors = (
+        factors.filter(pl.col("symbol").is_in(symbols))
+        if not factors.is_empty()
+        else factors
+    )
+    # 前复权 ratio = cum/total, 新除权事件会改写全部历史价。只用本次拉取
+    # 窗口算 enriched 时, 拆分日前的分区停在未复权价, 日K 留下跳空。
+    local = _load_local_etf_daily(repo, symbols)
+    hist = local if not local.is_empty() else raw
+    # ETF 使用复权和通用技术指标; 不传 instruments, 避免套用 A股涨跌停/连板逻辑。
+    enriched = compute_enriched(hist, factors=batch_factors, instruments=None)
+    repo.append_etf_enriched(enriched)
+    written = raw.height
+    del enriched, local, hist
+    gc.collect()
+    return written
+
+
 def sync_and_persist_etf_daily(
     repo: KlineRepository,
     capset: CapabilitySet,
@@ -397,11 +426,11 @@ def sync_and_persist_etf_daily(
     on_chunk_done: Callable[[int, int], None] | None = None,
 ) -> int:
     """同步 ETF 日K到独立 kline_etf_* parquet,并计算 ETF enriched。
-    on_chunk_done(current, total) 每个批次完成后回调。
-    """
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
-        return 0
 
+    日K源与 A 股一样按 daily_data_provider 独立路由。插件/自定义源可在没有
+    TickFlow KLINE_DAILY_BATCH 权限时提供 ETF 日K；只有回退 TickFlow 时才检查
+    TickFlow capability。on_chunk_done(current, total) 由实际 provider 报告进度。
+    """
     if symbols_override:
         symbols = sorted(set(s for s in symbols_override if s))
     else:
@@ -415,15 +444,56 @@ def sync_and_persist_etf_daily(
     if not symbols:
         return 0
 
+    end_time = end_date or datetime.now()
+    start_time = start_date or (end_time - timedelta(days=365))
+    factors = _load_etf_factors(repo)
+
+    provider_name = preferences.get_daily_data_provider()
+    if provider_name != "tickflow":
+        from app.data_providers import custom as custom_sources
+
+        if custom_sources.provider_has_dataset(provider_name, "daily"):
+            provider = custom_sources.get_provider(provider_name)
+            total_rows = 0
+            iter_daily = getattr(provider, "iter_daily", None)
+            if callable(iter_daily):
+                frames = iter_daily(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    asset_type="etf",
+                    on_chunk_done=on_chunk_done,
+                )
+                for raw in frames:
+                    total_rows += _persist_etf_daily_chunk(repo, raw, factors)
+            else:
+                raw = provider.get_daily(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    asset_type="etf",
+                    on_chunk_done=on_chunk_done,
+                )
+                total_rows += _persist_etf_daily_chunk(repo, raw, factors)
+
+            repo.refresh_index_views()
+            logger.info(
+                "etf daily synced via %s: %d symbols, +%d rows",
+                provider_name,
+                len(symbols),
+                total_rows,
+            )
+            return total_rows
+        # 已选择的自定义源没有 daily 能力时保留历史行为: 回退 TickFlow。
+
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        return 0
+
     limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
     batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
 
-    end_time = end_date or datetime.now()
-    start_time = start_date or (end_time - timedelta(days=365))
-
     total_rows = 0
     chunks = chunked(symbols, batch_size)
-    factors = _load_etf_factors(repo)
     for i, chunk in enumerate(chunks):
         sleep_between_batches(i, limit.rpm)
         raw = kline_sync.sync_daily_batch(
@@ -433,23 +503,17 @@ def sync_and_persist_etf_daily(
             start_time=start_time,
             end_time=end_time,
         )
-        if raw.is_empty():
-            continue
-
-        repo.append_etf_daily(raw)
-        batch_factors = factors.filter(pl.col("symbol").is_in(chunk)) if not factors.is_empty() else factors
-        # 前复权 ratio = cum/total, 新除权事件会改写全部历史价。只用本次拉取
-        # 窗口算 enriched 时, 拆分日前的分区停在未复权价, 日K 留下跳空。
-        local = _load_local_etf_daily(repo, chunk)
-        hist = local if not local.is_empty() else raw
-        # ETF 使用复权和通用技术指标; 不传 instruments, 避免套用 A股涨跌停/连板逻辑。
-        enriched = compute_enriched(hist, factors=batch_factors, instruments=None)
-        repo.append_etf_enriched(enriched)
-        total_rows += raw.height
-        logger.info("etf daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
+        written = _persist_etf_daily_chunk(repo, raw, factors)
+        total_rows += written
+        if written:
+            logger.info(
+                "etf daily synced: %d/%d chunks, +%d rows",
+                i + 1,
+                len(chunks),
+                written,
+            )
         if on_chunk_done:
             on_chunk_done(i + 1, len(chunks))
-        del raw, enriched, local, hist
-        gc.collect()
+
     repo.refresh_index_views()
     return total_rows

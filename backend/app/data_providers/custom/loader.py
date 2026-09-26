@@ -188,21 +188,32 @@ def install_plugin(name: str) -> tuple[bool, str]:
                 return False, "Python 型插件需要 requirements.txt"
             uv_bin = shutil.which("uv")
             if uv_bin:
+                import os
+
+                primary_env = {**os.environ, "UV_HTTP_TIMEOUT": "300"}
                 result = subprocess.run(
                     [uv_bin, "pip", "install", "--python", sys.executable, "-r", str(req)],
                     capture_output=True, text=True, timeout=300,
-                    env={**__import__("os").environ, "UV_HTTP_TIMEOUT": "300"},
+                    env=primary_env,
                 )
-                # exit 2 通常是配置文件解析错误, 绕过配置重试
-                # --no-config 会丢镜像, 显式传国内镜像加速 (与用户 uv.toml 意图一致)
-                if result.returncode == 2:
+                if result.returncode != 0:
+                    # 国内镜像可能已收录包名但版本同步滞后。uv 默认 first-index
+                    # 策略此时不会继续在 extra index 查找更新版本, 所以“镜像 + 官方”
+                    # 并不能自动回退。失败后显式清掉镜像环境变量, 用官方 PyPI
+                    # 单源重试一次；--no-config 同时隔离用户损坏的 uv.toml。
+                    official_env = dict(os.environ)
+                    official_env.pop("UV_DEFAULT_INDEX", None)
+                    official_env.pop("UV_EXTRA_INDEX_URL", None)
+                    official_env["UV_HTTP_TIMEOUT"] = "300"
                     result = subprocess.run(
-                        [uv_bin, "pip", "install", "--no-config",
-                         "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple",
-                         "--python", sys.executable,
-                         "-r", str(req)],
+                        [
+                            uv_bin, "pip", "install", "--no-config",
+                            "--index-url", "https://pypi.org/simple",
+                            "--python", sys.executable,
+                            "-r", str(req),
+                        ],
                         capture_output=True, text=True, timeout=300,
-                        env={**__import__("os").environ, "UV_HTTP_TIMEOUT": "300"},
+                        env=official_env,
                     )
             else:
                 result = subprocess.run(
