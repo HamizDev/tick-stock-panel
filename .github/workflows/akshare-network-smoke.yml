@@ -1,0 +1,116 @@
+name: AKShare network smoke
+
+on:
+  pull_request:
+    paths:
+      - 'backend/app/plugins/akshare/**'
+      - 'backend/app/services/index_sync.py'
+      - 'backend/app/services/quote_service.py'
+      - 'backend/app/services/trading_day.py'
+      - 'backend/app/data_providers/custom/loader.py'
+      - '.github/workflows/akshare-network-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-network:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.16'
+
+      - name: Install backend and AKShare
+        working-directory: backend
+        run: |
+          python -m pip install uv==0.12.19
+          uv sync --frozen --extra dev
+          env -u UV_DEFAULT_INDEX -u UV_EXTRA_INDEX_URL \
+            uv pip install --no-config \
+              --index-url https://pypi.org/simple \
+              --python .venv/bin/python \
+              -r app/plugins/akshare/requirements.txt
+
+      - name: Run live AKShare smoke
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+        run: |
+          .venv/bin/python - <<'PY'
+          from __future__ import annotations
+
+          import time
+          from datetime import datetime
+
+          from app.plugins.akshare.provider import AkShareProvider
+          from app.services import preferences
+
+          provider = AkShareProvider()
+
+          def retry(label, fn, attempts=3, delay=3):
+              last = None
+              for attempt in range(1, attempts + 1):
+                  try:
+                      value = fn()
+                      print(f"{label}: attempt {attempt} OK")
+                      return value
+                  except Exception as exc:
+                      last = exc
+                      print(f"{label}: attempt {attempt} failed: {exc}")
+                      if attempt < attempts:
+                          time.sleep(delay * attempt)
+              raise RuntimeError(f"{label} failed after {attempts} attempts: {last}")
+
+          stock_daily = retry(
+              "stock_daily",
+              lambda: provider.get_daily(
+                  ["600000.SH"],
+                  datetime(2026, 9, 22),
+                  datetime(2026, 9, 25),
+                  asset_type="stock",
+              ),
+          )
+          if stock_daily.is_empty():
+              raise SystemExit("stock daily returned 0 rows")
+
+          etf_daily = retry(
+              "etf_daily",
+              lambda: provider.get_daily(
+                  ["159915.SZ"],
+                  datetime(2026, 9, 22),
+                  datetime(2026, 9, 25),
+                  asset_type="etf",
+              ),
+          )
+          if etf_daily.is_empty():
+              raise SystemExit("ETF daily returned 0 rows")
+
+          preferences.get_realtime_pull_stock = lambda: True
+          preferences.get_realtime_pull_etf = lambda: False
+          stock_rt = retry("stock_realtime", provider.get_realtime)
+          if not stock_rt:
+              raise SystemExit("stock realtime returned 0 rows")
+
+          preferences.get_realtime_pull_stock = lambda: False
+          preferences.get_realtime_pull_etf = lambda: True
+          etf_rt = retry("etf_realtime", provider.get_realtime)
+          if not etf_rt:
+              raise SystemExit("ETF realtime returned 0 rows")
+
+          calendar = retry("calendar", provider.trading_days)
+          if not calendar:
+              raise SystemExit("trading calendar returned 0 rows")
+
+          print("=== AKSHARE LIVE SMOKE RESULT ===")
+          print("STOCK_DAILY_ROWS =", stock_daily.height)
+          print("ETF_DAILY_ROWS =", etf_daily.height)
+          print("STOCK_REALTIME_COUNT =", len(stock_rt))
+          print("ETF_REALTIME_COUNT =", len(etf_rt))
+          print("CALENDAR_COUNT =", len(calendar))
+          print("CALENDAR_MAX =", max(calendar))
+          PY
