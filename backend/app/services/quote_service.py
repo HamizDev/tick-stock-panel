@@ -519,6 +519,10 @@ class QuoteService:
     def _clamp_interval(self, interval: float) -> float:
         return max(self._tier_min_interval(), min(self.MAX_INTERVAL, interval))
 
+    def _effective_interval(self) -> float:
+        """Apply the currently selected provider's floor without requiring a restart."""
+        return max(self._interval, self._tier_min_interval())
+
     # ================================================================
     # 行情数据访问
     # ================================================================
@@ -578,7 +582,7 @@ class QuoteService:
             "paused": self._paused,
             "mode": mode,
             "realtime_allowed": mode != "none",
-            "interval_s": self._interval,
+            "interval_s": self._effective_interval(),
             "symbol_count": self._symbol_count,
             "index_symbol_count": self._index_symbol_count,
             "etf_symbol_count": self._etf_symbol_count,
@@ -664,8 +668,12 @@ class QuoteService:
             except Exception as e:  # noqa: BLE001
                 logger.warning("行情轮询异常: %s", e)
 
+            # Provider may be switched while the service is already running.
+            # Re-evaluate its floor every loop so a public endpoint is never polled
+            # faster than the plugin declares merely because the old source allowed it.
+            wait_interval = self._effective_interval()
             waited = 0.0
-            while self._running and self._enabled and waited < self._interval:
+            while self._running and self._enabled and waited < wait_interval:
                 time.sleep(0.5)
                 waited += 0.5
 
