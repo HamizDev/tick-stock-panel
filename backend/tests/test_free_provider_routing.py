@@ -96,6 +96,7 @@ def test_custom_realtime_provider_minimum_interval_is_respected(monkeypatch):
 def test_unverifiable_realtime_snapshot_fails_closed_for_final(monkeypatch):
     monkeypatch.setattr(preferences, "load", lambda: {})
     monkeypatch.setattr(preferences, "get_realtime_data_provider", lambda: "akshare")
+    monkeypatch.setattr(quote_service, "_persist_last_fetch", lambda _ts: None)
     from app.data_providers import custom as custom_sources
 
     provider = SimpleNamespace(
