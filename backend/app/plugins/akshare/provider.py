@@ -18,7 +18,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import polars as pl
@@ -177,6 +177,33 @@ class AkShareProvider:
 
     def close(self) -> None:
         return None
+
+    def trading_days(self) -> set[date]:
+        """Return the A-share trading calendar when AKShare's Sina calendar is current.
+
+        The oracle consumer checks the calendar's maximum date before using a negative
+        verdict, so a stale upstream calendar degrades to "unknown" instead of marking
+        future weekdays as holidays.
+        """
+        try:
+            rows = _records(_ak().tool_trade_date_hist_sina())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("AKShare 交易日历获取失败: %s", exc)
+            return set()
+
+        days: set[date] = set()
+        for row in rows:
+            value = row.get("trade_date")
+            if isinstance(value, datetime):
+                days.add(value.date())
+            elif isinstance(value, date):
+                days.add(value)
+            elif value:
+                try:
+                    days.add(datetime.fromisoformat(str(value).split(" ", 1)[0]).date())
+                except ValueError:
+                    continue
+        return days
 
     def _fetch_one_daily(
         self,
