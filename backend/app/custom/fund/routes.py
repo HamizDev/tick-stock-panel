@@ -177,4 +177,44 @@ def build_router() -> APIRouter:
         _cache.set(key, p, ttl_s=86400)
         return {"profile": p}
 
+    class AnalyzeIn(BaseModel):
+        thscode: str
+        focus: str = ""
+
+    @router.post("/analyze")
+    async def analyze(req: AnalyzeIn):
+        """AI 基金分析 (流式 NDJSON，与 /api/stock-analysis/analyze 协议一致)。"""
+        from fastapi.responses import StreamingResponse
+
+        from app.custom.fund import analyzer as fund_analyzer
+        from app.services.ndjson_heartbeat import with_heartbeat
+
+        thscode = req.thscode.strip().upper()
+        client = _client_or_503()
+
+        # 净值 (优先用缓存的 nav 接口)
+        try:
+            nav_rows = client.nav(thscode, range_="year", nav_type="unit,adj")
+        except FundError:
+            nav_rows = []
+        nav = svc.map_nav(nav_rows)
+
+        # 资料
+        try:
+            row = client.profile(thscode)
+            profile = svc.map_profile(row) if row else None
+        except FundError:
+            profile = None
+
+        # 名称 (自选表 > AkShare > thscode)
+        name = _watchlist_names().get(thscode) or svc._akshare_name(thscode) or thscode
+
+        async def _gen():
+            async for chunk in fund_analyzer.analyze_fund_stream(
+                nav, profile, thscode, name, req.focus or ""
+            ):
+                yield chunk + "\n"
+
+        return StreamingResponse(with_heartbeat(_gen()), media_type="application/x-ndjson")
+
     return router

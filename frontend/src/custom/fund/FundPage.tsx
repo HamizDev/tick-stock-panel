@@ -10,8 +10,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts } from 'echarts'
-import { ArrowLeft, BarChart3, Info, LineChart, Plus, Search, Star, Activity } from 'lucide-react'
+import { ArrowLeft, BarChart3, Info, LineChart, Plus, Search, Star, Activity, Sparkles, X, Loader2 } from 'lucide-react'
 import { EChartsCandlestick } from '@/components/EChartsCandlestick'
+import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { cn } from '@/lib/cn'
 import {
   fundApi,
@@ -176,6 +177,104 @@ function ProfileBlock({ profile }: { profile: FundProfile }) {
   )
 }
 
+/** AI 基金分析对话框 — 流式 NDJSON，与股票分析协议一致 */
+function FundAnalysisDialog({
+  thscode,
+  name,
+  onClose,
+}: {
+  thscode: string
+  name: string
+  onClose: () => void
+}) {
+  const [content, setContent] = useState('')
+  const [summary, setSummary] = useState('')
+  const [phase, setPhase] = useState<'loading' | 'streaming' | 'done' | 'error'>('loading')
+  const [error, setError] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let alive = true
+    setContent('')
+    setSummary('')
+    setError('')
+    setPhase('loading')
+    ;(async () => {
+      try {
+        for await (const ev of fundApi.analyzeStream(thscode)) {
+          if (!alive) return
+          if (ev.type === 'meta') {
+            setSummary(ev.summary ?? '')
+            setPhase('streaming')
+          } else if (ev.type === 'delta') {
+            setContent((c) => c + (ev.content ?? ''))
+            setPhase('streaming')
+          } else if (ev.type === 'error') {
+            setError(ev.message ?? '分析失败')
+            setPhase('error')
+            return
+          } else if (ev.type === 'done') {
+            setPhase('done')
+            return
+          }
+        }
+        if (alive) setPhase('done')
+      } catch (e) {
+        if (alive) {
+          setError(e instanceof Error ? e.message : '分析失败')
+          setPhase('error')
+        }
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [thscode])
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }, [content])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border border-border bg-background shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2.5">
+          <Sparkles className="h-4 w-4 text-accent" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold text-foreground">AI 基金分析</div>
+            <div className="truncate text-[11px] text-muted-foreground">
+              {name} <span className="font-mono">{thscode}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {summary && (
+          <div className="border-b border-border/40 bg-muted/30 px-4 py-1.5 text-[11px] text-muted-foreground">
+            {summary}
+          </div>
+        )}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
+          {phase === 'loading' && (
+            <div className="flex items-center gap-2 py-8 text-[12px] text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              正在分析基金数据…
+            </div>
+          )}
+          {phase === 'error' && <div className="py-4 text-[12px] text-bear">{error}</div>}
+          {(phase === 'streaming' || phase === 'done') && (
+            <MarkdownRenderer content={content || '正在生成…'} />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function FundDetail({ item, onBack }: { item: FundWatchItem | FundSearchItem; onBack: () => void }) {
   const thscode = item.thscode
   const tradable = isTradable('kind_label' in item ? item.kind_label : '')
@@ -184,6 +283,7 @@ function FundDetail({ item, onBack }: { item: FundWatchItem | FundSearchItem; on
   const [nav, setNav] = useState<FundNavPoint[] | null>(null)
   const [profile, setProfile] = useState<FundProfile | null>(null)
   const [err, setErr] = useState('')
+  const [showAnalysis, setShowAnalysis] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -259,7 +359,21 @@ function FundDetail({ item, onBack }: { item: FundWatchItem | FundSearchItem; on
         <span className="rounded bg-muted px-1.5 py-px font-mono text-[10px] text-muted-foreground">
           {thscode}
         </span>
+        <button
+          onClick={() => setShowAnalysis(true)}
+          className="ml-auto flex items-center gap-1 rounded-md bg-accent/15 px-2 py-1 text-[11px] font-medium text-accent hover:bg-accent/25"
+        >
+          <Sparkles className="h-3 w-3" />
+          AI 分析
+        </button>
       </div>
+      {showAnalysis && (
+        <FundAnalysisDialog
+          thscode={thscode}
+          name={item.name ?? thscode}
+          onClose={() => setShowAnalysis(false)}
+        />
+      )}
       {err && <div className="text-[11px] text-bear">{err}</div>}
       {profile && <ProfileBlock profile={profile} />}
       {tradable && quote && <QuoteCard quote={quote} />}
@@ -357,7 +471,7 @@ export function FundPage() {
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && doSearch()}
               placeholder="搜索基金/ETF: 代码或名称, 如 005827 / 沪深300"
-              className="h-7 w-full rounded-md border border-border/40 bg-background pl-7 pr-2 text-[11px] outline-none focus:border-accent"
+              className="h-7 w-full rounded-md border border-border/40 bg-white pl-7 pr-2 text-[11px] text-gray-900 placeholder:text-gray-400 outline-none focus:border-accent"
             />
           </div>
           <button

@@ -146,6 +146,55 @@ export const fundApi = {
   profile(thscode: string): Promise<{ profile: FundProfile | null }> {
     return req(`/profile/${encodeURIComponent(thscode)}`)
   },
+  /** AI 基金分析 (流式 NDJSON) */
+  async *analyzeStream(
+    thscode: string,
+    focus?: string,
+  ): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done' | 'ping'
+    symbol?: string
+    summary?: string
+    stats?: Record<string, number | null>
+    content?: string
+    message?: string
+  }> {
+    const res = await fetch(`/api/custom/fund/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ thscode, focus: focus ?? '' }),
+    })
+    if (!res.ok) {
+      let detail = ''
+      try {
+        const j = JSON.parse(await res.text())
+        detail = j.detail ?? j.message ?? ''
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail || `${res.status} ${res.statusText}`)
+    }
+    if (!res.body) throw new Error('响应无 body')
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const t = line.trim()
+        if (!t) continue
+        try {
+          yield JSON.parse(t)
+        } catch {
+          /* 跳过坏行 */
+        }
+      }
+    }
+  },
 }
 
 /** 小数制 → 百分比文案, null 显示 — */
