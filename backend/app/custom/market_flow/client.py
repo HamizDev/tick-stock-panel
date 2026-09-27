@@ -123,3 +123,67 @@ def get_industries(symbol: str) -> list[str]:
             industries = r.get("industries")
             return list(industries) if isinstance(industries, list) else []
     return []
+
+
+def _find_in(rows: list[dict], symbol: str) -> dict | None:
+    for r in rows:
+        if r.get("symbol") == symbol:
+            return r
+    return None
+
+
+def get_stock_flow(symbol: str) -> dict:
+    """单只股票的市场数据聚合: 人气排名/资金流向/主力资金/概念/行业。"""
+    pop = _find_in(_fetch("popularity"), symbol)
+    mf = _find_in(_fetch("money-flow"), symbol)
+    mfm = _find_in(_fetch("money-flow-main"), symbol)
+    return {
+        "symbol": symbol,
+        "popularity": {
+            "rank": pop.get("rank"),
+            "heat": pop.get("heat"),
+            "change_pct": _pct_to_decimal(pop.get("change_pct")),
+        } if pop else None,
+        "money_flow": {
+            "rank": mf.get("rank"),
+            "net": mf.get("net"),
+            "inflow": mf.get("inflow"),
+            "outflow": mf.get("outflow"),
+            "change_pct": _pct_to_decimal(mf.get("change_pct")),
+        } if mf else None,
+        "money_flow_main": {
+            "rank": mfm.get("rank"),
+            "net": mfm.get("net"),
+            "buy": mfm.get("buy"),
+            "sell": mfm.get("sell"),
+            "change_pct": _pct_to_decimal(mfm.get("change_pct")),
+        } if mfm else None,
+        "concepts": get_concepts(symbol),
+        "industries": get_industries(symbol),
+    }
+
+
+def get_concept_members(concept: str, limit: int = 200) -> list[dict]:
+    """概念成分股反查: 返回属于该概念的股票列表。"""
+    rows = _fetch("ths-concepts")
+    out = []
+    for r in rows:
+        concepts = r.get("concepts")
+        if isinstance(concepts, list) and concept in concepts:
+            out.append({"symbol": r.get("symbol"), "name": r.get("name")})
+            if len(out) >= limit:
+                break
+    return out
+
+
+def get_industry_members(industry: str, limit: int = 200) -> list[dict]:
+    """行业成分股反查。"""
+    rows = _fetch("ths-industries")
+    out = []
+    for r in rows:
+        industries = r.get("industries")
+        if isinstance(industries, list) and industry in industries:
+            out.append({"symbol": r.get("symbol"), "name": r.get("name")})
+            if len(out) >= limit:
+                break
+    return out

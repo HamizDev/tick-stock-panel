@@ -41,4 +41,19 @@ def build_router() -> APIRouter:
         """个股同花顺行业。"""
         return {"symbol": symbol.upper(), "industries": client.get_industries(symbol.upper())}
 
+    @router.get("/stock/{symbol}")
+    def stock_flow(symbol: str) -> dict:
+        """单只股票市场数据聚合: 人气/资金流向/主力资金/概念/行业。"""
+        return client.get_stock_flow(symbol.upper())
+
+    @router.get("/concept-members")
+    def concept_members(concept: str = Query(..., min_length=1, max_length=40)) -> dict:
+        """概念成分股反查。"""
+        return {"concept": concept, "items": client.get_concept_members(concept)}
+
+    @router.get("/industry-members")
+    def industry_members(industry: str = Query(..., min_length=1, max_length=40)) -> dict:
+        """行业成分股反查。"""
+        return {"industry": industry, "items": client.get_industry_members(industry)}
+
     return router

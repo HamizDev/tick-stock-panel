@@ -35,6 +35,20 @@ export interface MoneyFlowMainItem {
   change_pct: number | null
 }
 
+export interface StockFlow {
+  symbol: string
+  popularity: { rank: number | null; heat: number | null; change_pct: number | null } | null
+  money_flow: { rank: number | null; net: number | null; inflow: number | null; outflow: number | null; change_pct: number | null } | null
+  money_flow_main: { rank: number | null; net: number | null; buy: number | null; sell: number | null; change_pct: number | null } | null
+  concepts: string[]
+  industries: string[]
+}
+
+export interface MemberItem {
+  symbol: string
+  name: string | null
+}
+
 async function req<T>(path: string): Promise<T> {
   const res = await fetch(`/api/custom/market-flow${path}`, { credentials: 'same-origin' })
   if (!res.ok) {
@@ -65,6 +79,15 @@ export const marketFlowApi = {
   },
   industries(symbol: string): Promise<{ symbol: string; industries: string[] }> {
     return req(`/industries/${encodeURIComponent(symbol)}`)
+  },
+  stockFlow(symbol: string): Promise<StockFlow> {
+    return req(`/stock/${encodeURIComponent(symbol)}`)
+  },
+  conceptMembers(concept: string): Promise<{ concept: string; items: MemberItem[] }> {
+    return req(`/concept-members?concept=${encodeURIComponent(concept)}`)
+  },
+  industryMembers(industry: string): Promise<{ industry: string; items: MemberItem[] }> {
+    return req(`/industry-members?industry=${encodeURIComponent(industry)}`)
   },
 }
 
