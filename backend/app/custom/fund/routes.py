@@ -49,6 +49,11 @@ class WatchAddIn(BaseModel):
     asset_type: str | None = None
 
 
+class AnalyzeIn(BaseModel):
+    thscode: str
+    focus: str = ""
+
+
 def build_router() -> APIRouter:
     router = APIRouter(prefix="/api/custom/fund", tags=["custom-fund"])
 
@@ -184,10 +189,6 @@ def build_router() -> APIRouter:
         p = svc.map_profile(row) if row else None
         _cache.set(key, p, ttl_s=86400)
         return {"profile": p}
-
-    class AnalyzeIn(BaseModel):
-        thscode: str
-        focus: str = ""
 
     @router.post("/analyze")
     async def analyze(req: AnalyzeIn):
