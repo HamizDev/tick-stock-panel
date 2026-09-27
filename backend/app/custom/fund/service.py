@@ -179,6 +179,22 @@ def map_profile(row: dict) -> dict:
     }
 
 
+def akshare_search(q: str, limit: int = 20) -> list[dict]:
+    """经 akshare-proxy 本地模糊搜索基金 (fuyao 搜不到时的补充)。"""
+    import urllib.request
+    import urllib.parse
+
+    try:
+        url = f"{_AKSHARE_PROXY}/fund/search?q={urllib.parse.quote(q)}&limit={limit}"
+        req = urllib.request.Request(url, headers={"User-Agent": "tsp/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("items") or []
+    except Exception:
+        pass
+    return []
+
+
 def map_search(rows: list[dict]) -> list[dict]:
     """检索结果 → [{thscode, ticker, name, asset_type, kind_label}]。"""
     out = []

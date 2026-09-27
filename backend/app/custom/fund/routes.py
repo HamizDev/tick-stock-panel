@@ -58,12 +58,17 @@ def build_router() -> APIRouter:
         types: str = Query("fund-otc,fund-etf,fund-lof"),
         limit: int = Query(20, ge=1, le=50),
     ) -> dict:
-        """基金/ETF 检索: q=代码或名称子串。"""
+        """基金/ETF 检索: q=代码或名称子串。fuyao 搜不到时用 AkShare 本地补充。"""
         client = _client_or_503()
         try:
             rows = client.search(q.strip(), asset_types=types, limit=limit)
         except FundError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+        # fuyao 中文模糊搜索弱 (如"南方信息"返回 0 条)，用 AkShare 本地补充
+        if not rows:
+            ak_rows = svc.akshare_search(q.strip(), limit=limit)
+            if ak_rows:
+                return {"items": svc.map_search(ak_rows)}
         return {"items": svc.map_search(rows)}
 
     @router.get("/watchlist")
