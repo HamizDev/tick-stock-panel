@@ -131,12 +131,19 @@ def map_nav(rows: list[dict]) -> list[dict]:
     return out
 
 
+# fuyao 返回的错误/截断基金名修正表 (经 akshare 核验)
+FUND_NAME_OVERRIDES = {
+    "021959.OF": "南方黄金股指数C",
+}
+
+
 def map_profile(row: dict) -> dict:
     """基金资料行 → 标准资料 (字段缺失置 None)。"""
+    thscode = row.get("thscode")
     return {
-        "thscode": row.get("thscode"),
+        "thscode": thscode,
         "ticker": row.get("ticker"),
-        "fund_name": row.get("fund_name"),
+        "fund_name": FUND_NAME_OVERRIDES.get(thscode) or row.get("fund_name"),
         "estab_date": _beijing_date(row.get("estab_date")),
         "mgmt_name": row.get("mgmt_name"),
         "manager_name": row.get("manager_name"),
@@ -153,11 +160,12 @@ def map_search(rows: list[dict]) -> list[dict]:
         if not thscode:
             continue
         at = r.get("asset_type") or ""
+        name = FUND_NAME_OVERRIDES.get(thscode) or r.get("name") or r.get("fund_name")
         out.append(
             {
                 "thscode": thscode,
                 "ticker": r.get("ticker"),
-                "name": r.get("name") or r.get("fund_name"),
+                "name": name,
                 "asset_type": at,
                 "kind_label": ASSET_KIND_LABEL.get(at, at),
             }
