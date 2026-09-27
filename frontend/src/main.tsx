@@ -45,6 +45,8 @@ const queryClient = new QueryClient({
 async function bootstrap() {
   await initializeFrontendExtensions()
   const { router } = await import('./router')
+  // App 成功启动 → 清除 chunk 自动刷新标记, 下次 chunk 加载失败时仍有一次自动刷新机会。
+  sessionStorage.removeItem('tsp-chunk-reloaded')
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>

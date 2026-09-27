@@ -46,8 +46,38 @@ const COMPUTE_REQUEST_TIMEOUT_MS = 300_000
  *  /day, 后端超时 120s) 必须把这层同步放宽。 */
 const extPullTimeoutMs = (timeoutSeconds?: number) => (timeoutSeconds ?? 30) * 1000 + 10_000
 
+/** 网关层瞬断 (免费隧道闪断 / 网关重启) 时值得重试的状态码。 */
+const RETRYABLE_GATEWAY_STATUS = new Set([502, 503, 504])
+/** 只有幂等方法才自动重试, 避免 POST/PUT/DELETE 重复提交。 */
+const isIdempotentMethod = (method?: string) =>
+  !method || method === 'GET' || method === 'HEAD'
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
 async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   const { quiet, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, ...fetchInit } = init ?? {}
+  // 幂等 GET/HEAD: 网关瞬断时静默重试 (共 3 次尝试), 全部失败才弹 toast。
+  const maxAttempts = isIdempotentMethod(fetchInit.method) ? 3 : 1
+  for (let attempt = 1; ; attempt++) {
+    const lastAttempt = attempt >= maxAttempts
+    try {
+      return await doRequest<T>(path, fetchInit, lastAttempt ? quiet : true, timeoutMs)
+    } catch (err) {
+      const transient =
+        err instanceof ApiError
+          ? err.status === 0 || RETRYABLE_GATEWAY_STATUS.has(err.status)
+          : !(err instanceof DOMException) // fetch 裸网络错误 (Failed to fetch); 用户主动 abort 的 DOMException 不重试
+      if (lastAttempt || !transient) throw err
+      await sleep(700 * attempt)
+    }
+  }
+}
+
+async function doRequest<T>(
+  path: string,
+  fetchInit: Omit<RequestOptions, 'quiet' | 'timeoutMs'>,
+  quiet: boolean | undefined,
+  timeoutMs: number | null | undefined,
+): Promise<T> {
   const isFormData = fetchInit.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
@@ -474,6 +504,17 @@ export interface OverviewDimensionRankItem {
     name?: string | null
     change_pct?: number | null
   } | null
+}
+
+/** Dashboard 首屏聚合接口返回 — 与各单独接口返回格式一致，仅做聚合 */
+export interface DashboardInit {
+  overview: OverviewMarket
+  capabilities: CapabilitiesResponse
+  settings: SettingsState
+  preferences: Preferences
+  data_sources: DataSourcesResponse
+  data_status: DataStatus
+  alerts: { alerts: AlertEvent[]; total: number }
 }
 
 export interface OverviewMarket {
@@ -2810,6 +2851,8 @@ export const api = {
   marketSnapshot: () =>
     request<{ as_of: string | null; rows: MarketSnapshotRow[] }>('/api/screener/market-snapshot'),
   overviewMarket: (asOf?: string) => request<OverviewMarket>(`/api/overview/market${asOf ? `?as_of=${asOf}` : ''}`),
+  /** Dashboard 首屏聚合：一次返回 overview/capabilities/settings/preferences/data-sources/data-status/alerts */
+  dashboardInit: (asOf?: string) => request<DashboardInit>(`/api/dashboard/init${asOf ? `?as_of=${asOf}` : ''}`),
 
   // 概念涨幅轮动矩阵: 每列(日期)各自把所有概念按当天涨幅从高到低排序
   rpsRotation: (days: number, kind?: 'concept' | 'industry', level?: number) =>

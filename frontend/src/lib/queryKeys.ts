@@ -19,6 +19,7 @@ export const QK = {
   quoteStatus:    ['quote-status'] as const,
   quoteInterval:  ['quote-interval'] as const,
   overviewMarket: (asOf?: string) => ['overview-market', asOf ?? 'latest'] as const,
+  dashboardInit: (asOf?: string) => ['dashboard-init', asOf ?? 'latest'] as const,
   indexQuotes:    ['index-quotes'] as const,
 
   // Watchlist

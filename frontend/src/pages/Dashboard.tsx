@@ -8,7 +8,6 @@ import { api, type MarketSnapshotRow, type OverviewDimensionRankItem, type Overv
 import { QK } from '@/lib/queryKeys'
 import { fmtBigNum, fmtPct } from '@/lib/format'
 import { DimensionMembersDialog, dimensionKindForSourceField, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
-import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { toNavItems, type NavItem } from '@/lib/listNav'
@@ -586,6 +585,41 @@ function rankNav(rank?: OverviewMarket['concept_rank']): NavItem[] {
   return toNavItems(leaders)
 }
 
+/** 首屏骨架屏：聚合接口加载时占位，模拟看板卡片布局，感知速度更快 */
+function DashboardSkeleton() {
+  const shimmer = 'animate-pulse rounded bg-border/40'
+  return (
+    <div className="min-h-full bg-base p-1.5" aria-label="加载中">
+      <div className="grid grid-cols-2 gap-1.5 md:grid-cols-4">
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} className="rounded-card border border-border bg-surface/80 p-3">
+            <div className={`${shimmer} h-3 w-16`} />
+            <div className={`${shimmer} mt-2 h-7 w-24`} />
+            <div className={`${shimmer} mt-2 h-3 w-20`} />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 grid grid-cols-1 gap-1.5 md:grid-cols-2">
+        {[0, 1].map(i => (
+          <div key={i} className="rounded-card border border-border bg-surface/80 p-3">
+            <div className={`${shimmer} h-4 w-24`} />
+            {[0, 1, 2, 3, 4].map(j => (
+              <div key={j} className="mt-2 flex items-center gap-2">
+                <div className={`${shimmer} h-3 w-3/4`} />
+                <div className={`${shimmer} ml-auto h-3 w-12`} />
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 rounded-card border border-border bg-surface/80 p-3">
+        <div className={`${shimmer} h-4 w-32`} />
+        <div className={`${shimmer} mt-3 h-40 w-full`} />
+      </div>
+    </div>
+  )
+}
+
 export function Dashboard() {
   const qc = useQueryClient()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
@@ -603,38 +637,46 @@ export function Dashboard() {
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
-  const dataStatus = useDataStatus({ staleTime: 60_000 })
-  const overview = useQuery({
-    queryKey: QK.overviewMarket(selectedDate),
-    queryFn: () => api.overviewMarket(selectedDate),
+  // 首屏聚合：1 个请求替代原来的 7 个并行请求 (overview/capabilities/settings/
+  // preferences/data-sources/data-status/alerts)。切换日期时 placeholderData
+  // 保留上一份数据不白屏。
+  const init = useQuery({
+    queryKey: QK.dashboardInit(selectedDate),
+    queryFn: () => api.dashboardInit(selectedDate),
     staleTime: 5_000,
     placeholderData: (prev) => prev,
   })
-  const data = overview.data
-  const caps = useCapabilities()
-  const settings = useSettings()
-  const hasDepth = !!caps.data?.capabilities?.['depth5.batch']
+  // 把聚合结果同步写入各共享 queryKey 的缓存，其他页面/组件用 useCapabilities()
+  // 等共享 hook 时直接命中缓存，不再发请求。
+  useEffect(() => {
+    const d = init.data
+    if (!d) return
+    qc.setQueryData(QK.overviewMarket(selectedDate), d.overview)
+    qc.setQueryData(QK.capabilities, d.capabilities)
+    qc.setQueryData(QK.settings, d.settings)
+    qc.setQueryData(QK.preferences, d.preferences)
+    qc.setQueryData(QK.dataSources, d.data_sources)
+    qc.setQueryData(QK.dataStatus, d.data_status)
+    qc.setQueryData(['alerts', ''], d.alerts)
+  }, [init.data, selectedDate, qc])
+  const overview = init
+  const data = init.data?.overview
+  const hasDepth = !!init.data?.capabilities?.capabilities?.['depth5.batch']
   const sealedReady = !!data?.limit?.sealed_ready
   const isSealedDegrade = !hasDepth || !sealedReady
   // 空态引导文案按当前数据源分流: TickFlow 源提"免费服务器", 其他源提"当前数据源",
   // 弱化与默认 TickFlow 的隐式绑定 (None 档/免费 Key 等 TickFlow 概念仅在其被选中时出现)
-  const prefs = usePreferences()
-  const dataSourceList = useQuery({
-    queryKey: QK.dataSources,
-    queryFn: api.dataSources,
-    staleTime: 60_000,
-  })
-  const activeProvider = prefs.data?.daily_data_provider || 'tickflow'
+  const activeProvider = init.data?.preferences?.daily_data_provider || 'tickflow'
   const isTickflowProvider = activeProvider === 'tickflow'
   const providerLabel = [
-    ...(dataSourceList.data?.builtin ?? []),
-    ...(dataSourceList.data?.plugins ?? []),
-    ...(dataSourceList.data?.custom ?? []),
+    ...(init.data?.data_sources?.builtin ?? []),
+    ...(init.data?.data_sources?.plugins ?? []),
+    ...(init.data?.data_sources?.custom ?? []),
   ].find(s => s.name === activeProvider)?.display_name
     ?.replace(/（.*?）|\(.*?\)/g, '').trim() || activeProvider
   // 无本地数据(enriched/daily 都没有)→ 常驻引导卡片
   // 注: 后端 status 的 rows 为性能刻意返回 0, 用 trading_days 判断是否有数据
-  const ds = dataStatus.data
+  const ds = init.data?.data_status
   const hasNoData = !!ds
     && (ds.enriched?.trading_days ?? 0) === 0
     && (ds.daily?.trading_days ?? 0) === 0
@@ -665,11 +707,11 @@ export function Dashboard() {
   const adjGate = useAdjFactorSyncGate()
   useEffect(() => {
     if (!hasNoData) return
-    if (settings.data?.onboarding_completed === false) return  // 还在引导流程中,不重复弹
+    if (init.data?.settings?.onboarding_completed === false) return  // 还在引导流程中,不重复弹
     if (sessionStorage.getItem('tf_welcome_shown')) return
     sessionStorage.setItem('tf_welcome_shown', '1')
     setShowWelcomeModal(true)
-  }, [hasNoData, settings.data?.onboarding_completed])
+  }, [hasNoData, init.data?.settings?.onboarding_completed])
 
   // 同步完成后刷新看板数据
   useEffect(() => {
@@ -704,13 +746,7 @@ export function Dashboard() {
   }
 
   if (overview.isLoading && !data) {
-    return (
-      <div className="flex h-full items-center justify-center bg-base">
-        <div className="flex items-center gap-2 text-sm text-muted">
-          <Loader2 className="h-4 w-4 animate-spin" /> 加载市场看板…
-        </div>
-      </div>
-    )
+    return <DashboardSkeleton />
   }
 
   if (!data) {
@@ -727,7 +763,7 @@ export function Dashboard() {
   const score = data.emotion?.score ?? 50
   const strongUp = data.breadth.strong_up ?? 0
   const strongDown = data.breadth.strong_down ?? 0
-  const latestDate = dataStatus.data?.enriched?.latest_date ?? null
+  const latestDate = init.data?.data_status?.enriched?.latest_date ?? null
   const currentDate = selectedDate ?? data.as_of ?? ''
   const quoteRunning = (!selectedDate || selectedDate === latestDate) && data.quote_status?.running
   // 实时模式: none / watchlist / full_market。
@@ -788,7 +824,7 @@ export function Dashboard() {
             <DatePicker
               value={currentDate}
               onChange={setSelectedDate}
-              min={dataStatus.data?.enriched?.earliest_date ?? undefined}
+              min={init.data?.data_status?.enriched?.earliest_date ?? undefined}
               max={latestDate ?? undefined}
               className="w-32"
             />

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -17,6 +18,7 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    dashboard,
     data,
     ext_data,
     factors,
@@ -413,6 +415,8 @@ app = FastAPI(
 # CORS: 允许局域网访问 (自托管场景, 放开所有来源)
 # 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
 # 本项目认证走 header (API Key), 不依赖 cookie, 故关闭 credentials 换取通配来源。
+# GZip: 免费隧道带宽/延迟不稳定, 压缩静态资源 (JS/CSS) 3x 左右, 首屏加载明显加快。
+app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -497,6 +501,7 @@ app.include_router(lots.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
 app.include_router(sector_rotation.router)
+app.include_router(dashboard.router)
 
 # 二次开发路由与小粒度策略在所有核心路由后注册, 禁止覆盖核心路径。
 extension_registry, extension_load_errors = configure_backend_extensions(app)

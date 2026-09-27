@@ -38,6 +38,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    // 不清空旧构建产物: 用户标签页可能停留在旧版应用, 其引用的旧 hash chunk
+    // 必须继续可访问, 否则部署后旧标签页切路由会 404。旧文件会自然累积,
+    // 定期手动清理 dist 即可 (文件名都带 content hash, 不会冲突)。
+    emptyOutDir: false,
     rollupOptions: {
       output: {
         // 把重型图表库拆到独立 chunk, 避免打进主包 + 让页面按需加载。

@@ -694,6 +694,37 @@ class QuoteService:
                         except Exception as e:  # noqa: BLE001
                             logger.warning("自定义源指数行情拉取失败: %s", e)
                             replace_index_cache = False
+                    # ETF/LOF 补充: 场内基金快照是独立单标的端点 (如 fuyao
+                    # /api/fund/market)。只补自选里的 ETF/LOF (上限 60 只),
+                    # 避免全市场逐只打爆上游。插件可选实现 get_realtime_etfs。
+                    fetch_etfs = getattr(provider, "get_realtime_etfs", None)
+                    if callable(fetch_etfs):
+                        try:
+                            from app.tickflow.pools import get_pool
+
+                            etf_universe: set[str] = set()
+                            if self._repo:
+                                etf_inst = self._repo.get_etf_instruments()
+                                if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
+                                    etf_universe = set(
+                                        etf_inst["symbol"].cast(pl.Utf8).to_list()
+                                    )
+                            watch = get_pool("watchlist") or []
+                            if etf_universe:
+                                # 有 ETF 维表时只补维表确认过的 ETF/LOF
+                                wanted_etfs = sorted(
+                                    {s for s in watch if s in etf_universe}
+                                )[:60]
+                            else:
+                                # 无维表时把自选逐只试探: 非场内基金上游返回
+                                # code=3004 由 provider 单只跳过, 不猜代码格式
+                                wanted_etfs = list(dict.fromkeys(watch))[:60]
+                            if wanted_etfs:
+                                fetched_etfs = fetch_etfs(wanted_etfs)
+                                if fetched_etfs:
+                                    records = records + fetched_etfs
+                        except Exception as e:
+                            logger.warning("自定义源ETF行情拉取失败: %s", e)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("自定义实时行情拉取失败: %s", e)
                     return

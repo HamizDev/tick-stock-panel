@@ -433,6 +433,46 @@ class FuyaoProvider:
         logger.info("扶摇指数行情拉取完成: %d 条(请求 %d 只)", len(records), len(wanted))
         return records
 
+    def get_realtime_etfs(self, symbols: list[str]) -> list[dict] | None:
+        """ETF/LOF 实时快照 → 内部 realtime record (可选插件协议, quote_service 鸭子类型调用)。
+
+        扶摇场内基金快照是单标的端点 (不支持批量), 这里逐只串行拉取并做
+        礼貌间隔; 上游限流时整体软失败返回 None (保留上轮有效缓存)。
+        非场内基金代码单只跳过 (股票 → code=3001, 场外基金 → code=3004)。
+
+        上限 60 只: 自选场景够用, 避免全市场轮询打爆上游。
+        失败返回 None, 让上层与"成功但无数据"的空列表区分。
+        """
+        wanted = [s for s in dict.fromkeys(symbols or []) if s][:60]
+        if not wanted:
+            return []
+        try:
+            client = self._get_client()
+        except FuyaoError as e:
+            logger.warning("扶摇ETF行情拉取失败: %s", e)
+            return None
+        fetched_ms = int(time.time() * 1000)
+        records = []
+        for sym in wanted:
+            try:
+                row = client.fund_snapshot(sym)
+            except FuyaoError as e:
+                logger.warning("扶摇ETF行情拉取失败: %s", e)
+                return None
+            if not row:
+                continue
+            rec = _map_snapshot_row(row, fetched_ms)
+            if rec is None:
+                continue
+            # 场内基金快照独有: 振幅/换手率 (百分数原值 → 小数制)
+            amp = _to_float(row.get("price_amplitude_ratio_pct"))
+            rec["amplitude"] = amp / 100.0 if amp is not None else None
+            tr = _to_float(row.get("turnover_ratio_pct"))
+            rec["turnover_rate"] = tr / 100.0 if tr is not None else None
+            records.append(rec)
+        logger.info("扶摇ETF行情拉取完成: %d 条(请求 %d 只)", len(records), len(wanted))
+        return records
+
     # ---- daily ----
     def get_daily(
         self,

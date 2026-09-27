@@ -137,6 +137,28 @@ class FuyaoClient:
             rows = []
         return rows, server_ts
 
+    def fund_snapshot(self, thscode: str) -> dict | None:
+        """单只场内基金(ETF/LOF)实时快照 (/api/fund/market/snapshot)。
+
+        实测: 场外基金 → code=3004, 股票等非基金代码 → code=3001;
+        两者都视为"非场内基金"返回 None (单只跳过), 其他业务错误照常抛出。
+        """
+        try:
+            data = self._get("/api/fund/market/snapshot", {"thscode": thscode})
+        except FuyaoError as e:
+            if "code=3004" in str(e) or "code=3001" in str(e):
+                return None
+            raise
+        try:
+            server_ts = int(data.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            server_ts = 0
+        self.last_server_ts = server_ts
+        rows = data.get("item")
+        if not isinstance(rows, list) or not rows:
+            return None
+        return rows[0]
+
     # ---- 历史日K ----
     def historical_kline(
         self, thscode: str, start_ms: int, end_ms: int, adjust: str = "none"
