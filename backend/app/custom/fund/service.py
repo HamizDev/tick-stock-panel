@@ -132,18 +132,45 @@ def map_nav(rows: list[dict]) -> list[dict]:
 
 
 # fuyao 返回的错误/截断基金名修正表 (经 akshare 核验)
+# akshare-proxy (127.0.0.1:3019) 会动态补充, 这里是启动时的已知修正。
 FUND_NAME_OVERRIDES = {
     "021959.OF": "南方黄金股指数C",
 }
+
+_AKSHARE_PROXY = "http://127.0.0.1:3019"
+
+
+def _akshare_name(thscode: str) -> str | None:
+    """经 akshare-proxy 查询基金正确名称, 失败返回 None。"""
+    import urllib.request
+    import urllib.parse
+
+    code = thscode.split(".")[0]
+    # 先查本地表
+    if thscode in FUND_NAME_OVERRIDES:
+        return FUND_NAME_OVERRIDES[thscode]
+    try:
+        url = f"{_AKSHARE_PROXY}/fund/name?code={urllib.parse.quote(code)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "tsp/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+            name = data.get("name")
+            if name:
+                FUND_NAME_OVERRIDES[thscode] = name  # 记入缓存
+                return name
+    except Exception:
+        pass
+    return None
 
 
 def map_profile(row: dict) -> dict:
     """基金资料行 → 标准资料 (字段缺失置 None)。"""
     thscode = row.get("thscode")
+    ak_name = _akshare_name(thscode) if thscode else None
     return {
         "thscode": thscode,
         "ticker": row.get("ticker"),
-        "fund_name": FUND_NAME_OVERRIDES.get(thscode) or row.get("fund_name"),
+        "fund_name": ak_name or row.get("fund_name"),
         "estab_date": _beijing_date(row.get("estab_date")),
         "mgmt_name": row.get("mgmt_name"),
         "manager_name": row.get("manager_name"),
@@ -160,7 +187,8 @@ def map_search(rows: list[dict]) -> list[dict]:
         if not thscode:
             continue
         at = r.get("asset_type") or ""
-        name = FUND_NAME_OVERRIDES.get(thscode) or r.get("name") or r.get("fund_name")
+        ak_name = _akshare_name(thscode)
+        name = ak_name or r.get("name") or r.get("fund_name")
         out.append(
             {
                 "thscode": thscode,
