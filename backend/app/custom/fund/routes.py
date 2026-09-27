@@ -74,7 +74,15 @@ def build_router() -> APIRouter:
 
     @router.get("/watchlist")
     def watchlist() -> dict:
-        return {"items": svc.load_watchlist()}
+        items = svc.load_watchlist()
+        # 读取时动态修正名称 (自选存的是添加时的旧名, 可能是 fuyao 截断名)
+        for it in items:
+            thscode = it.get("thscode") or ""
+            if thscode:
+                ak_name = svc._akshare_name(thscode)
+                if ak_name:
+                    it["name"] = ak_name
+        return {"items": items}
 
     @router.post("/watchlist")
     def watchlist_add(req: WatchAddIn) -> dict:
