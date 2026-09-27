@@ -116,7 +116,7 @@ async function doReq<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const fundApi = {
-  search(q: string, limit = 20): Promise<{ items: FundSearchItem[] }> {
+  search(q: string, limit = 50): Promise<{ items: FundSearchItem[] }> {
     return req(`/search?q=${encodeURIComponent(q)}&limit=${limit}`)
   },
   watchlist(): Promise<{ items: FundWatchItem[] }> {

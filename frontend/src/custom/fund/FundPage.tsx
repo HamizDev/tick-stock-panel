@@ -379,9 +379,9 @@ export function FundPage() {
               <li key={r.thscode} className="flex items-center gap-2 py-1.5">
                 <button
                   onClick={() => setSelected(r)}
-                  className="flex flex-1 items-center gap-1.5 text-left"
+                  className="flex flex-1 items-center gap-1.5 text-left min-w-0"
                 >
-                  <span className="text-[11px] font-medium hover:text-accent">{r.name ?? r.thscode}</span>
+                  <span className="text-[11px] font-medium hover:text-accent break-words">{r.name ?? r.thscode}</span>
                   <span className="font-mono text-[10px] text-muted-foreground">{r.thscode}</span>
                   <span className="rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
                     {r.kind_label}
