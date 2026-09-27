@@ -29,7 +29,8 @@ from app.services.financial_sync import get_financial_df
 logger = logging.getLogger(__name__)
 
 # 注入最近多少根日 K(技术面分析样本)
-_KLINE_WINDOW = 90
+# 90 天时 prompt 约 34K tokens，超 Qwen2.5-7B 的 32K 上限；30 天约 11K，安全。
+_KLINE_WINDOW = 30
 # 注入财务表的最近期数
 _MAX_PERIODS = 4
 
