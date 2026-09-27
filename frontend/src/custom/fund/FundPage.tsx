@@ -3,10 +3,14 @@
  *
  * 自包含扩展页面: 数据全部走 /api/custom/fund, 状态用组件内 state +
  * 手动轮询, 不碰核心 queryKeys / api.ts / 全局 store。删除本目录即卸载。
+ *
+ * 样式: 与主面板 Dashboard 一致 (accent 色条标题 / surface 卡片 /
+ * 紧凑字号 / 数字 font-mono)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts } from 'echarts'
+import { ArrowLeft, BarChart3, Info, LineChart, Plus, Search, Star, Activity } from 'lucide-react'
 import { EChartsCandlestick } from '@/components/EChartsCandlestick'
 import { cn } from '@/lib/cn'
 import {
@@ -23,6 +27,26 @@ const QUOTE_POLL_MS = 15000
 
 function isTradable(kind: string): boolean {
   return kind === 'ETF' || kind === 'LOF'
+}
+
+/** 主面板风格区块标题: accent 色条 + Icon + text-xs 标题 */
+function SectionTitle({ icon: Icon, title }: { icon: typeof Activity; title: string }) {
+  return (
+    <div className="mb-1.5 flex items-center gap-1.5">
+      <span className="h-3 w-0.5 rounded-full bg-gradient-to-b from-accent to-accent/30" />
+      <Icon className="h-3.5 w-3.5 text-accent" />
+      <h2 className="text-xs font-semibold text-foreground">{title}</h2>
+    </div>
+  )
+}
+
+/** 主面板风格卡片 */
+function Card({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <div className={cn('rounded-md border border-border/40 bg-surface/60 p-2.5', className)}>
+      {children}
+    </div>
+  )
 }
 
 function useWatchlist() {
@@ -57,25 +81,25 @@ function NavChart({ nav }: { nav: FundNavPoint[] }) {
     const dates = nav.map((p) => p.nav_date)
     chart.setOption({
       animation: false,
-      tooltip: { trigger: 'axis' },
-      legend: { data: ['单位净值', '复权净值'], textStyle: { color: '#9aa4b2' } },
-      grid: { left: 48, right: 16, top: 32, bottom: 28 },
-      xAxis: { type: 'category', data: dates },
-      yAxis: { type: 'value', scale: true },
+      tooltip: { trigger: 'axis', textStyle: { fontSize: 11 } },
+      legend: { data: ['单位净值', '复权净值'], textStyle: { color: '#9aa4b2', fontSize: 10 } },
+      grid: { left: 40, right: 12, top: 26, bottom: 22 },
+      xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 9 } },
+      yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 9 } },
       series: [
         {
           name: '单位净值',
           type: 'line',
           showSymbol: false,
           data: nav.map((p) => p.unit_nav),
-          lineStyle: { color: '#4f8cff', width: 2 },
+          lineStyle: { color: '#4f8cff', width: 1.5 },
         },
         {
           name: '复权净值',
           type: 'line',
           showSymbol: false,
           data: nav.map((p) => p.adj_nav),
-          lineStyle: { color: '#f0a35e', width: 2 },
+          lineStyle: { color: '#f0a35e', width: 1.5 },
         },
       ],
     })
@@ -86,25 +110,26 @@ function NavChart({ nav }: { nav: FundNavPoint[] }) {
 
   useEffect(() => () => chartRef.current?.dispose(), [])
 
-  return <div ref={ref} className="h-72 w-full" />
+  return <div ref={ref} className="h-52 w-full" />
 }
 
 function QuoteCard({ quote }: { quote: FundQuote }) {
   const up = (quote.change_pct ?? 0) >= 0
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-baseline gap-3">
-        <span className="text-2xl font-bold tabular-nums">
+    <Card>
+      <SectionTitle icon={Activity} title="实时行情" />
+      <div className="flex items-baseline gap-2">
+        <span className="font-mono text-lg font-bold tabular-nums">
           {quote.last_price?.toFixed(3) ?? '—'}
         </span>
-        <span className={cn('text-sm font-medium tabular-nums', up ? 'text-bull' : 'text-bear')}>
+        <span className={cn('font-mono text-[11px] tabular-nums', up ? 'text-bull' : 'text-bear')}>
           {quote.change_amount !== null && quote.change_amount !== undefined
             ? `${up ? '+' : ''}${quote.change_amount.toFixed(3)}`
             : '—'}{' '}
           {pctText(quote.change_pct)}
         </span>
       </div>
-      <div className="mt-3 grid grid-cols-4 gap-2 text-sm">
+      <div className="mt-1.5 grid grid-cols-4 gap-1.5 text-[11px]">
         {[
           ['开盘', quote.open?.toFixed(3)],
           ['最高', quote.high?.toFixed(3)],
@@ -116,12 +141,12 @@ function QuoteCard({ quote }: { quote: FundQuote }) {
           ['成交额', quote.amount ? `${(quote.amount / 1e8).toFixed(2)}亿` : undefined],
         ].map(([k, v]) => (
           <div key={k}>
-            <div className="text-xs text-muted-foreground">{k}</div>
-            <div className="tabular-nums">{v ?? '—'}</div>
+            <div className="text-[10px] text-muted-foreground">{k}</div>
+            <div className="font-mono tabular-nums">{v ?? '—'}</div>
           </div>
         ))}
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -134,20 +159,20 @@ function ProfileBlock({ profile }: { profile: FundProfile }) {
     ['基金类型', profile.fund_type],
   ]
   return (
-    <div className="rounded-lg border border-border bg-card p-4 text-sm">
-      <div className="mb-2 font-medium">基本资料</div>
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+    <Card>
+      <SectionTitle icon={Info} title="基本资料" />
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
         {rows.map(([k, v]) => (
-          <div key={k} className="flex gap-2">
+          <div key={k} className="flex gap-1.5">
             <dt className="shrink-0 text-muted-foreground">{k}</dt>
             <dd className="truncate">{v ?? '—'}</dd>
           </div>
         ))}
       </dl>
       {profile.benchmark && (
-        <div className="mt-2 text-xs text-muted-foreground">业绩基准: {profile.benchmark}</div>
+        <div className="mt-1 text-[10px] text-muted-foreground">业绩基准: {profile.benchmark}</div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -221,43 +246,51 @@ function FundDetail({ item, onBack }: { item: FundWatchItem | FundSearchItem; on
   )
 
   return (
-    <div className="space-y-4">
-      <button onClick={onBack} className="text-sm text-muted-foreground hover:text-foreground">
-        ← 返回基金中心
+    <div className="space-y-2.5">
+      <button
+        onClick={onBack}
+        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="h-3 w-3" />
+        返回基金中心
       </button>
-      <div className="flex items-center gap-3">
-        <h2 className="text-xl font-bold">{item.name ?? thscode}</h2>
-        <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+      <div className="flex items-center gap-1.5">
+        <h2 className="text-xs font-semibold text-foreground">{item.name ?? thscode}</h2>
+        <span className="rounded bg-muted px-1.5 py-px font-mono text-[10px] text-muted-foreground">
           {thscode}
         </span>
       </div>
-      {err && <div className="text-sm text-bear">{err}</div>}
+      {err && <div className="text-[11px] text-bear">{err}</div>}
       {profile && <ProfileBlock profile={profile} />}
       {tradable && quote && <QuoteCard quote={quote} />}
       {tradable && kline && (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="font-medium">日K</span>
-            <span className="text-xs text-muted-foreground">前复权口径 (数据源仅提供前复权)</span>
+        <Card>
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span className="h-3 w-0.5 rounded-full bg-gradient-to-b from-accent to-accent/30" />
+              <BarChart3 className="h-3.5 w-3.5 text-accent" />
+              <h2 className="text-xs font-semibold text-foreground">日K</h2>
+            </div>
+            <span className="text-[10px] text-muted-foreground">前复权口径 (数据源仅提供前复权)</span>
           </div>
           {ohlc.length > 0 ? (
-            <EChartsCandlestick data={ohlc} height={380} showMA showInfoBar={false} showMarkers={false} />
+            <EChartsCandlestick data={ohlc} height={300} showMA showInfoBar={false} showMarkers={false} />
           ) : (
-            <div className="py-8 text-center text-sm text-muted-foreground">暂无K线数据</div>
+            <div className="py-6 text-center text-[11px] text-muted-foreground">暂无K线数据</div>
           )}
-        </div>
+        </Card>
       )}
       {!tradable && (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <div className="mb-2 font-medium">净值走势 (近一年)</div>
+        <Card>
+          <SectionTitle icon={LineChart} title="净值走势 (近一年)" />
           {nav && nav.length > 0 ? (
             <NavChart nav={nav} />
           ) : (
-            <div className="py-8 text-center text-sm text-muted-foreground">
+            <div className="py-6 text-center text-[11px] text-muted-foreground">
               {nav ? '暂无净值数据' : '加载中…'}
             </div>
           )}
-        </div>
+        </Card>
       )}
     </div>
   )
@@ -304,83 +337,87 @@ export function FundPage() {
 
   if (selected) {
     return (
-      <div className="mx-auto max-w-5xl p-4">
+      <div className="mx-auto max-w-5xl space-y-2.5 p-2.5">
         <FundDetail item={selected} onBack={() => setSelected(null)} />
       </div>
     )
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-4">
-      <h1 className="text-xl font-bold">基金中心</h1>
+    <div className="mx-auto max-w-5xl space-y-2.5 p-2.5">
+      <SectionTitle icon={Star} title="基金中心" />
 
       {/* 搜索 */}
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="flex gap-2">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && doSearch()}
-            placeholder="搜索基金/ETF: 代码或名称, 如 005827 / 沪深300"
-            className="flex-1 rounded border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-          />
+      <Card>
+        <div className="flex gap-1.5">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && doSearch()}
+              placeholder="搜索基金/ETF: 代码或名称, 如 005827 / 沪深300"
+              className="h-7 w-full rounded-md border border-border/40 bg-background pl-7 pr-2 text-[11px] outline-none focus:border-accent"
+            />
+          </div>
           <button
             onClick={doSearch}
             disabled={searching}
-            className="rounded bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50"
+            className="h-7 shrink-0 rounded-md bg-accent px-3 text-[11px] font-medium text-white disabled:opacity-50"
           >
             {searching ? '搜索中…' : '搜索'}
           </button>
         </div>
         {searched && !searching && results.length === 0 && (
-          <div className="mt-3 text-sm text-muted-foreground">
+          <div className="mt-1.5 text-[11px] text-muted-foreground">
             未找到相关基金，换个关键词或直接搜代码试试（如 510300）。
           </div>
         )}
         {results.length > 0 && (
-          <ul className="mt-3 divide-y divide-border">
+          <ul className="mt-1.5 divide-y divide-border/40">
             {results.map((r) => (
-              <li key={r.thscode} className="flex items-center gap-3 py-2">
+              <li key={r.thscode} className="flex items-center gap-2 py-1.5">
                 <button
                   onClick={() => setSelected(r)}
-                  className="flex flex-1 items-center gap-2 text-left hover:text-primary"
+                  className="flex flex-1 items-center gap-1.5 text-left"
                 >
-                  <span className="font-medium">{r.name ?? r.thscode}</span>
-                  <span className="text-xs text-muted-foreground">{r.thscode}</span>
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                  <span className="text-[11px] font-medium hover:text-accent">{r.name ?? r.thscode}</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">{r.thscode}</span>
+                  <span className="rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
                     {r.kind_label}
                   </span>
                 </button>
                 {inWatch.has(r.thscode) ? (
-                  <span className="text-xs text-muted-foreground">已在自选</span>
+                  <span className="text-[10px] text-muted-foreground">已在自选</span>
                 ) : (
                   <button
                     onClick={() => addWatch(r)}
-                    className="rounded border border-border px-2 py-1 text-xs hover:border-primary hover:text-primary"
+                    className="flex items-center gap-0.5 rounded-md border border-border/40 px-1.5 py-0.5 text-[10px] hover:border-accent hover:text-accent"
                   >
-                    + 自选
+                    <Plus className="h-3 w-3" />
+                    自选
                   </button>
                 )}
               </li>
             ))}
           </ul>
         )}
-      </div>
+      </Card>
 
       {/* 自选 */}
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="mb-3 font-medium">我的自选</div>
-        {loading && <div className="text-sm text-muted-foreground">加载中…</div>}
-        {error && <div className="text-sm text-bear">{error}</div>}
+      <Card>
+        <SectionTitle icon={Star} title="我的自选" />
+        {loading && <div className="text-[11px] text-muted-foreground">加载中…</div>}
+        {error && <div className="text-[11px] text-bear">{error}</div>}
         {!loading && items.length === 0 && (
-          <div className="text-sm text-muted-foreground">
+          <div className="text-[11px] text-muted-foreground">
             还没有自选基金, 在上方搜索添加。场外基金看净值走势, ETF/LOF 看实时行情与日K。
           </div>
         )}
         {etfItems.length > 0 && (
           <>
-            <div className="mb-1 text-xs text-muted-foreground">ETF / LOF</div>
-            <ul className="mb-3 divide-y divide-border">
+            <div className="mb-1 text-[10px] text-muted-foreground">ETF / LOF</div>
+            <ul className="mb-1.5 divide-y divide-border/40">
               {etfItems.map((w) => (
                 <WatchRow key={w.thscode} item={w} onOpen={setSelected} onRemove={async () => { await fundApi.removeWatch(w.thscode); refresh() }} />
               ))}
@@ -389,17 +426,17 @@ export function FundPage() {
         )}
         {otcItems.length > 0 && (
           <>
-            <div className="mb-1 text-xs text-muted-foreground">场外基金</div>
-            <ul className="divide-y divide-border">
+            <div className="mb-1 text-[10px] text-muted-foreground">场外基金</div>
+            <ul className="divide-y divide-border/40">
               {otcItems.map((w) => (
                 <WatchRow key={w.thscode} item={w} onOpen={setSelected} onRemove={async () => { await fundApi.removeWatch(w.thscode); refresh() }} />
               ))}
             </ul>
           </>
         )}
-      </div>
+      </Card>
 
-      <p className="text-xs text-muted-foreground">
+      <p className="text-[10px] text-muted-foreground">
         数据来源: 扶摇开放平台 (免费 Key, 不限累计调用)。场外净值为 T-1 日公布值;
         ETF 日K为前复权口径。场内 ETF 实时行情也会同步到自选股行情轮询。
       </p>
@@ -433,20 +470,20 @@ function WatchRow({
 
   const up = (quote?.change_pct ?? 0) >= 0
   return (
-    <li className="flex items-center gap-3 py-2">
-      <button onClick={() => onOpen(item)} className="flex flex-1 items-center gap-3 text-left">
-        <span className="font-medium hover:text-primary">{item.name ?? item.thscode}</span>
-        <span className="text-xs text-muted-foreground">{item.thscode}</span>
+    <li className="flex items-center gap-2 py-1.5">
+      <button onClick={() => onOpen(item)} className="flex flex-1 items-center gap-2 text-left">
+        <span className="text-[11px] font-medium hover:text-accent">{item.name ?? item.thscode}</span>
+        <span className="font-mono text-[10px] text-muted-foreground">{item.thscode}</span>
         {tradable && quote && (
           <>
-            <span className="tabular-nums">{quote.last_price?.toFixed(3) ?? '—'}</span>
-            <span className={cn('text-sm tabular-nums', up ? 'text-bull' : 'text-bear')}>
+            <span className="font-mono text-[11px] tabular-nums">{quote.last_price?.toFixed(3) ?? '—'}</span>
+            <span className={cn('font-mono text-[11px] tabular-nums', up ? 'text-bull' : 'text-bear')}>
               {pctText(quote.change_pct)}
             </span>
           </>
         )}
       </button>
-      <button onClick={onRemove} className="text-xs text-muted-foreground hover:text-bear">
+      <button onClick={onRemove} className="text-[10px] text-muted-foreground hover:text-bear">
         移除
       </button>
     </li>
