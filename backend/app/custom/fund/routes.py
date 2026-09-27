@@ -65,10 +65,11 @@ def build_router() -> APIRouter:
         except FundError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
         # fuyao 中文模糊搜索弱 (如"南方信息"返回 0 条)，用 AkShare 本地补充
+        # (AkShare 返回的名称已是完整简称，跳过逐条修正，省 30+s)
         if not rows:
             ak_rows = svc.akshare_search(q.strip(), limit=limit)
             if ak_rows:
-                return {"items": svc.map_search(ak_rows)}
+                return {"items": svc.map_search(ak_rows, skip_akshare=True)}
         return {"items": svc.map_search(rows)}
 
     @router.get("/watchlist")

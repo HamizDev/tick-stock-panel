@@ -195,16 +195,23 @@ def akshare_search(q: str, limit: int = 20) -> list[dict]:
     return []
 
 
-def map_search(rows: list[dict]) -> list[dict]:
-    """检索结果 → [{thscode, ticker, name, asset_type, kind_label}]。"""
+def map_search(rows: list[dict], skip_akshare: bool = False) -> list[dict]:
+    """检索结果 → [{thscode, ticker, name, asset_type, kind_label}]。
+
+    skip_akshare=True 时跳过逐条 AkShare 名称修正 (AkShare 本地搜索返回的
+    名称已是完整简称，无需再查；fuyao 结果仍需修正截断名)。
+    """
     out = []
     for r in rows:
         thscode = r.get("thscode")
         if not thscode:
             continue
         at = r.get("asset_type") or ""
-        ak_name = _akshare_name(thscode)
-        name = ak_name or r.get("name") or r.get("fund_name")
+        if skip_akshare:
+            name = r.get("name") or r.get("fund_name")
+        else:
+            ak_name = _akshare_name(thscode)
+            name = ak_name or r.get("name") or r.get("fund_name")
         out.append(
             {
                 "thscode": thscode,
