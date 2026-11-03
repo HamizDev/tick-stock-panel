@@ -1159,17 +1159,46 @@ def get_minute(
     )
 
 
+def _sync_daily_by_asset_type(request: Request, symbols: list[str], days: int) -> tuple[int, list[str]]:
+    """ETF日K必须进入独立kline_etf_*表，不能走股票kline_daily入口。
+
+    历史缺口即使上游已返回，也会因误写到股票表而一直留在ETF图表里。
+    仅改变ETF分流，股票旧入口语义保持原样；写入结果按资产类型合计。
+    """
+    repo = request.app.state.repo
+    capset = request.app.state.capabilities
+    stock_symbols: list[str] = []
+    etf_symbols: list[str] = []
+    for symbol in symbols:
+        kind = repo.resolve_asset_type(symbol)
+        (etf_symbols if kind == "etf" else stock_symbols).append(symbol)
+
+    zero: list[str] = []
+    written = 0
+    if stock_symbols:
+        written += kline_sync.sync_and_persist_daily_batch(
+            stock_symbols, repo, capset, count=days, zero_row_out=zero,
+        )
+    if etf_symbols:
+        from app.services import index_sync
+        etf_written = index_sync.sync_and_persist_etf_daily(
+            repo, capset, count=days, symbols_override=etf_symbols,
+        )
+        written += etf_written
+        # Single-symbol and entire-batch empty results must not claim success.
+        if etf_written == 0:
+            zero.extend(etf_symbols)
+    return written, zero
+
+
 @router.post("/sync")
 def sync_symbol(
     request: Request,
     symbol: str = Query(...),
     days: int = Query(250, ge=10, le=2000),
 ):
-    """手动触发单股同步(Free 用户在 K 线页用)。"""
-    repo = request.app.state.repo
-    capset = request.app.state.capabilities
-    zero: list[str] = []
-    n = kline_sync.sync_and_persist_daily_batch([symbol], repo, capset, count=days, zero_row_out=zero)
+    """按证券类型同步日K；ETF落入独立的ETF原始与指标表。"""
+    n, zero = _sync_daily_by_asset_type(request, [symbol], days)
     resp = {"symbol": symbol, "rows_written": n}
     if zero:
         resp["zero_row_symbols"] = zero
@@ -1182,14 +1211,9 @@ def sync_batch(
     symbols: list[str],
     days: int = Query(250, ge=10, le=2000),
 ):
-    repo = request.app.state.repo
-    capset = request.app.state.capabilities
-    zero: list[str] = []
-    n = kline_sync.sync_and_persist_daily_batch(symbols, repo, capset, count=days, zero_row_out=zero)
+    n, zero = _sync_daily_by_asset_type(request, symbols, days)
     resp = {"symbols": symbols, "rows_written": n}
     if zero:
-        # fail-loud (#302): 裸符号被跳过/上游 200 空数据的标的显式列出,
-        # 不再"回填显示成功、实际全库 0 行"
         resp["zero_row_symbols"] = zero
     return resp
 
