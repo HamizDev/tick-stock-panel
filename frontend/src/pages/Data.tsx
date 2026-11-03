@@ -68,16 +68,26 @@ export function Data() {
   const settings = useSettings()
 
   const status = useDataStatus({
+    staleTime: 60_000,
     refetchInterval: (query) => {
       const data = query.state.data
       // 指标异步预热中 或 有活跃 job → 加快轮询到 2s
       if (activeJobId || data?.indicators_ready === false) return 2_000
-      return 30_000
+      return 60_000
     },
   })
 
   // 市场环境(regime) 覆盖画像 —— 走独立接口(/api/regime/coverage), 不在 data/status 内。
   // 同步任务完成后刷新一次; 平时 30s 轮询与 status 对齐。
+  // Lightweight file metadata renders first; full historical aggregates arrive later.
+  const quickStatus = useQuery({
+    queryKey: ['data-quick-status'],
+    queryFn: api.dataQuickStatus,
+    enabled: !status.data,
+    staleTime: 120_000,
+    retry: false,
+  })
+
   const regimeCoverage = useQuery({
     queryKey: QK.regimeCoverage,
     queryFn: () => api.regimeCoverage(),
@@ -313,7 +323,7 @@ export function Data() {
     }
   }, [history.data?.active_id])
 
-  const s = status.data
+  const s = status.data ?? quickStatus.data
   const isLoading = status.isLoading
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
@@ -414,7 +424,7 @@ export function Data() {
             hint="盘前同步 · 元数据快照"
             stats={s?.instruments}
             isInstrument
-            loading={isLoading}
+            loading={isLoading && !s?.instruments}
             active={activeCard === 'instruments'}
             done={doneStages.has('instruments')}
             skipped={skippedCards.has('instruments')}
@@ -431,7 +441,7 @@ export function Data() {
             title="日 K"
             hint="增量同步 · 全市场"
             stats={s?.daily}
-            loading={isLoading}
+            loading={isLoading && !s?.daily}
             active={activeCard === 'daily'}
             done={doneStages.has('daily')}
             skipped={skippedCards.has('daily')}
@@ -451,7 +461,7 @@ export function Data() {
             title="除权因子"
             hint="增量同步 · 全市场"
             stats={s?.adj_factor}
-            loading={isLoading}
+            loading={isLoading && !s?.adj_factor}
             active={activeCard === 'adj_factor'}
             done={doneStages.has('adj_factor')}
             skipped={skippedCards.has('adj_factor')}
@@ -469,7 +479,7 @@ export function Data() {
             title="Enriched"
             hint="复权 OHLCV + 技术指标"
             stats={s?.enriched}
-            loading={isLoading}
+            loading={isLoading && !s?.enriched}
             active={activeCard === 'enriched'}
             done={doneStages.has('enriched')}
             skipped={skippedCards.has('enriched')}
@@ -490,7 +500,7 @@ export function Data() {
             title="指数"
             hint="CN_Index · 独立存储"
             stats={indexOverviewStats}
-            loading={isLoading}
+            loading={isLoading && !indexOverviewStats}
             active={activeCard === 'index_daily'}
             done={doneStages.has('index_daily')}
             skipped={skippedCards.has('index_daily')}
@@ -515,7 +525,7 @@ export function Data() {
             title="ETF"
             hint="场内基金 · 独立存储"
             stats={etfOverviewStats}
-            loading={isLoading}
+            loading={isLoading && !etfOverviewStats}
             tierKey="etf"
             capLimits={mergedCaps}
             customProvider={routeProviderDisplay(matrix.data, 'daily')}
@@ -535,7 +545,7 @@ export function Data() {
             title="分钟 K"
             hint="全市场同步"
             stats={s?.minute}
-            loading={isLoading}
+            loading={isLoading && !s?.minute}
             active={activeCard === 'minute'}
             done={doneStages.has('minute')}
             skipped={skippedCards.has('minute')}
@@ -556,7 +566,7 @@ export function Data() {
             title="财务数据"
             hint="财报 / 指标 / 历史股本"
             stats={s?.financials ? { rows: s.financials.rows } : null}
-            loading={isLoading}
+            loading={isLoading && !s?.financials}
             tierKey="financials"
             capLimits={mergedCaps}
             customProvider={routeProviderDisplay(matrix.data, 'financial')}
@@ -870,7 +880,7 @@ export function Data() {
               {isLoading ? (
                 <Skeleton w="w-12" />
               ) : (
-                <span className="font-mono text-xs text-muted">{s ? `${s.storage.total_size_mb} MB` : '—'}</span>
+                <span className="font-mono text-xs text-muted">{s ? `${s?.storage?.total_size_mb} MB` : '—'}</span>
               )}
             </div>
             <div className="space-y-2">
@@ -885,12 +895,12 @@ export function Data() {
                   </div>
                 ))
               ) : [
-                { label: '个股维表', files: s?.storage.instruments_files, size: s?.storage.instruments_size_mb },
-                { label: '日 K',     files: s?.storage.daily_files,       size: s?.storage.daily_size_mb },
-                { label: '除权因子', files: s?.storage.adj_factor_files,  size: s?.storage.adj_factor_size_mb },
-                { label: 'Enriched', files: s?.storage.enriched_files,    size: s?.storage.enriched_size_mb },
-                { label: '分钟 K',   files: s?.storage.minute_files,      size: s?.storage.minute_size_mb },
-                { label: '财务数据', files: s?.storage.financials_files,   size: s?.storage.financials_size_mb },
+                { label: '个股维表', files: s?.storage?.instruments_files, size: s?.storage?.instruments_size_mb },
+                { label: '日 K',     files: s?.storage?.daily_files,       size: s?.storage?.daily_size_mb },
+                { label: '除权因子', files: s?.storage?.adj_factor_files,  size: s?.storage?.adj_factor_size_mb },
+                { label: 'Enriched', files: s?.storage?.enriched_files,    size: s?.storage?.enriched_size_mb },
+                { label: '分钟 K',   files: s?.storage?.minute_files,      size: s?.storage?.minute_size_mb },
+                { label: '财务数据', files: s?.storage?.financials_files,   size: s?.storage?.financials_size_mb },
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between text-[11px]">
                   <span className="text-muted">{item.label}</span>
@@ -905,9 +915,9 @@ export function Data() {
                 <div className="flex items-center justify-between text-[11px] border-t border-border/50 pt-2 mt-1">
                   <span className="text-muted">扩展数据</span>
                   <div className="flex items-center gap-3">
-                    <span className="font-mono text-secondary">{s?.storage.ext_data_files ?? extConfigs.data.items.length} 文件</span>
+                    <span className="font-mono text-secondary">{s?.storage?.ext_data_files ?? extConfigs.data.items.length} 文件</span>
                     <span className="font-mono text-muted w-16 text-right">
-                      {s?.storage.ext_data_size_mb != null ? `${s.storage.ext_data_size_mb.toFixed(1)} MB` : '—'}
+                      {s?.storage?.ext_data_size_mb != null ? `${s?.storage?.ext_data_size_mb.toFixed(1)} MB` : '—'}
                     </span>
                   </div>
                 </div>
@@ -918,6 +928,15 @@ export function Data() {
 
         {/* 数据画像 */}
         <div>
+          {status.isError && (
+            <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded-card border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-secondary">
+              <span>详细统计暂时不可用；已加载的概览仍可查看。</span>
+              <button className="shrink-0 text-accent hover:underline" onClick={() => void status.refetch()}>重试</button>
+            </div>
+          )}
+          {status.isLoading && quickStatus.data && (
+            <div className="mb-2 text-xs text-muted">快速概览已显示，详细统计加载中…</div>
+          )}
           <SectionTitle icon={Database}>数据画像</SectionTitle>
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 items-stretch">
             {getCardOrder().filter(k => cardVisible[k]).map((k: CardKey) => (

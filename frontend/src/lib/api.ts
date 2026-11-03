@@ -507,13 +507,21 @@ export interface OverviewDimensionRankItem {
 }
 
 /** Dashboard 首屏聚合接口返回 — 与各单独接口返回格式一致，仅做聚合 */
+export interface DashboardDataSummary {
+  known: boolean
+  daily: { trading_days: number; earliest_date: string | null; latest_date: string | null } | null
+  enriched: { trading_days: number; earliest_date: string | null; latest_date: string | null } | null
+}
+
+/** Full data status is only fetched by Data, not by overview. */
 export interface DashboardInit {
   overview: OverviewMarket
   capabilities: CapabilitiesResponse
   settings: SettingsState
   preferences: Preferences
   data_sources: DataSourcesResponse
-  data_status: DataStatus
+  data_summary: DashboardDataSummary
+  data_status?: DataStatus
   alerts: { alerts: AlertEvent[]; total: number }
 }
 
@@ -2852,7 +2860,7 @@ export const api = {
     request<{ as_of: string | null; rows: MarketSnapshotRow[] }>('/api/screener/market-snapshot'),
   overviewMarket: (asOf?: string) => request<OverviewMarket>(`/api/overview/market${asOf ? `?as_of=${asOf}` : ''}`),
   /** Dashboard 首屏聚合：一次返回 overview/capabilities/settings/preferences/data-sources/data-status/alerts */
-  dashboardInit: (asOf?: string) => request<DashboardInit>(`/api/dashboard/init${asOf ? `?as_of=${asOf}` : ''}`),
+  dashboardInit: (asOf?: string) => request<DashboardInit>(`/api/dashboard/init?include_data_status=false${asOf ? `&as_of=${asOf}` : ''}`, { quiet: true }),
 
   // 概念涨幅轮动矩阵: 每列(日期)各自把所有概念按当天涨幅从高到低排序
   rpsRotation: (days: number, kind?: 'concept' | 'industry', level?: number) =>
@@ -3169,7 +3177,8 @@ export const api = {
       `/api/pipeline/jobs?limit=${limit}`,
     ),
 
-  dataStatus: () => request<DataStatus>('/api/data/status'),
+  dataStatus: () => request<DataStatus>('/api/data/status', { quiet: true }),
+  dataQuickStatus: () => request<Partial<DataStatus>>('/api/data/quick-status', { quiet: true, timeoutMs: 15_000 }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),

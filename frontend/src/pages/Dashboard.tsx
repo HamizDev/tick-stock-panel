@@ -643,6 +643,7 @@ export function Dashboard() {
   const init = useQuery({
     queryKey: QK.dashboardInit(selectedDate),
     queryFn: () => api.dashboardInit(selectedDate),
+    retry: false,
     staleTime: 5_000,
     placeholderData: (prev) => prev,
   })
@@ -656,7 +657,7 @@ export function Dashboard() {
     qc.setQueryData(QK.settings, d.settings)
     qc.setQueryData(QK.preferences, d.preferences)
     qc.setQueryData(QK.dataSources, d.data_sources)
-    qc.setQueryData(QK.dataStatus, d.data_status)
+    if (d.data_status) qc.setQueryData(QK.dataStatus, d.data_status)
     qc.setQueryData(['alerts', ''], d.alerts)
   }, [init.data, selectedDate, qc])
   const overview = init
@@ -676,7 +677,7 @@ export function Dashboard() {
     ?.replace(/（.*?）|\(.*?\)/g, '').trim() || activeProvider
   // 无本地数据(enriched/daily 都没有)→ 常驻引导卡片
   // 注: 后端 status 的 rows 为性能刻意返回 0, 用 trading_days 判断是否有数据
-  const ds = init.data?.data_status
+  const ds = init.data?.data_summary ?? init.data?.data_status
   const hasNoData = !!ds
     && (ds.enriched?.trading_days ?? 0) === 0
     && (ds.daily?.trading_days ?? 0) === 0
@@ -763,7 +764,7 @@ export function Dashboard() {
   const score = data.emotion?.score ?? 50
   const strongUp = data.breadth.strong_up ?? 0
   const strongDown = data.breadth.strong_down ?? 0
-  const latestDate = init.data?.data_status?.enriched?.latest_date ?? null
+  const latestDate = (init.data?.data_summary?.enriched ?? init.data?.data_status?.enriched)?.latest_date ?? null
   const currentDate = selectedDate ?? data.as_of ?? ''
   const quoteRunning = (!selectedDate || selectedDate === latestDate) && data.quote_status?.running
   // 实时模式: none / watchlist / full_market。
@@ -824,7 +825,7 @@ export function Dashboard() {
             <DatePicker
               value={currentDate}
               onChange={setSelectedDate}
-              min={init.data?.data_status?.enriched?.earliest_date ?? undefined}
+              min={(init.data?.data_summary?.enriched ?? init.data?.data_status?.enriched)?.earliest_date ?? undefined}
               max={latestDate ?? undefined}
               className="w-32"
             />

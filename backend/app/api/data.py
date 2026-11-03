@@ -22,9 +22,9 @@ router = APIRouter(prefix="/api/data", tags=["data"])
 # 同步期间前端 2s 轮一次 status,每张表 aggregate 全表 count + min/max + distinct
 # 太重,加 TTL + 事件失效。stage 写完只清对应那张表的缓存。
 
-_TABLE_TTL = 30.0  # 兜底 TTL,即使没人调 invalidate 也会过期
-_TABLE_TTL_LARGE = 120.0  # 大表(分钟K等)单独 TTL，避免多分区聚合反复重算
-_STORAGE_TTL = 60.0  # storage 文件扫描独立 TTL,stage 写完不触发重算
+_TABLE_TTL = 120.0  # 兜底 TTL,即使没人调 invalidate 也会过期
+_TABLE_TTL_LARGE = 300.0  # 大表(分钟K等)单独 TTL，避免多分区聚合反复重算
+_STORAGE_TTL = 180.0  # storage 文件扫描独立 TTL,stage 写完不触发重算
 
 # 聚合慢的大表（分区数多、行数多），使用更长的 TTL
 _LARGE_TABLES = {"minute"}
@@ -97,6 +97,48 @@ def _get_table_stats(name: str, fetch: Callable[[], dict | None]) -> dict | None
     return fresh
 
 
+
+def _partition_date_stats(directory: Path) -> tuple[str, str, int] | None:
+    """Use ISO date directory names: no full history Parquet scan."""
+    dates: list[str] = []
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False) and entry.name.startswith("date="):
+                    value = entry.name[5:]
+                    if len(value) == 10 and value[4] == "-" and value[7] == "-":
+                        dates.append(value)
+    except OSError:
+        return None
+    if not dates:
+        return None
+    return min(dates), max(dates), len(dates)
+
+
+def _enriched_column_count(directory: Path, repo, view: str) -> int:
+    """Read a single recent Parquet footer instead of DESCRIBE over years of files."""
+    newest = None
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False) and entry.name.startswith("date="):
+                    if newest is None or entry.name > newest.name:
+                        newest = entry
+        if newest is not None:
+            with os.scandir(newest.path) as files:
+                for entry in files:
+                    if entry.is_file(follow_symlinks=False) and entry.name.endswith(".parquet"):
+                        import polars as pl
+                        return len(pl.read_parquet_schema(entry.path))
+    except Exception:
+        pass
+    # Preserve legacy views and a safe fallback when latest partition is missing.
+    try:
+        return len(repo.execute_all(f"DESCRIBE {view}"))
+    except Exception:
+        return 0
+
+
 def _safe_aggregate(repo, view: str) -> dict | None:
     """聚合视图基础统计;视图不存在或为空时返 None。"""
     try:
@@ -158,12 +200,9 @@ def _safe_aggregate_enriched(repo) -> dict | None:
     标的数从 instruments 小表取。
     """
     # 字段数：读 schema，不碰数据
-    fields = 0
-    try:
-        cols = repo.execute_all("DESCRIBE kline_enriched")
-        fields = len(cols)
-    except Exception:  # noqa: BLE001
-        pass
+    fields = _enriched_column_count(
+        repo.store.data_dir / "kline_daily_enriched", repo, "kline_enriched",
+    )
 
     # 日期范围：从分区目录名获取，不扫数据
     enriched_dir = repo.store.data_dir / "kline_daily_enriched"
@@ -232,12 +271,9 @@ def _safe_aggregate_index_daily(repo) -> dict | None:
 
 def _safe_aggregate_index_enriched(repo) -> dict | None:
     """指数 enriched 统计。指数数据量较小，直接读取 parquet 元数据统计真实行数。"""
-    fields = 0
-    try:
-        cols = repo.execute_all("DESCRIBE kline_index_enriched")
-        fields = len(cols)
-    except Exception:  # noqa: BLE001
-        pass
+    fields = _enriched_column_count(
+        repo.store.data_dir / "kline_index_enriched", repo, "kline_index_enriched",
+    )
     stats = _safe_aggregate(repo, "kline_index_enriched")
     if not stats:
         return None
@@ -302,12 +338,9 @@ def _safe_aggregate_etf_instruments(repo) -> dict | None:
 
 def _safe_aggregate_etf_enriched(repo) -> dict | None:
     """ETF enriched 统计 — 独立 kline_etf_enriched。"""
-    fields = 0
-    try:
-        cols = repo.execute_all("DESCRIBE kline_etf_enriched")
-        fields = len(cols)
-    except Exception:  # noqa: BLE001
-        pass
+    fields = _enriched_column_count(
+        repo.store.data_dir / "kline_etf_enriched", repo, "kline_etf_enriched",
+    )
     stats = _safe_aggregate(repo, "kline_etf_enriched")
     if not stats:
         return None
@@ -354,12 +387,19 @@ def _safe_aggregate_adj_factor(repo) -> dict | None:
     """adj_factor 视图统计,日期范围对齐日 K 覆盖区间。"""
     try:
         # 取日 K 的日期范围作为过滤条件
-        dr = repo.execute_one(
-            "SELECT min(date), max(date) FROM kline_daily"
-        )
-        if not dr or not dr[0]:
-            return None
-        d_min, d_max = dr[0], dr[1]
+        # Historical stock daily has 1,000+ Parquet partitions. Querying
+        # min/max across the full view blocks page loads for seconds.
+        period = _partition_date_stats(repo.store.data_dir / "kline_daily")
+        if period is not None:
+            d_min, d_max, _ = period
+        else:
+            # Backward-compatible fallback for legacy nonpartitioned stores.
+            dr = repo.execute_one(
+                "SELECT min(date), max(date) FROM kline_daily"
+            )
+            if not dr or not dr[0]:
+                return None
+            d_min, d_max = dr[0], dr[1]
         row = repo.execute_one(
             """SELECT count(*) AS rows,
                       count(DISTINCT symbol) AS symbols,
@@ -583,6 +623,63 @@ def _last_finished(job_label: str) -> str | None:
     with _last_finished_lock:
         _last_finished_cache = cache
     return cache.get(job_label)
+
+
+
+@router.get("/quick-status")
+def quick_status(request: Request) -> dict:
+    """Small, read-only data-page preview; expensive exact aggregates load separately.
+
+    Never scan the whole 1,000+ day history or claim exact Parquet row counts.
+    The front end replaces this partial summary with /status once it arrives.
+    """
+    repo = request.app.state.repo
+    directory = repo.store.data_dir
+
+    def partition(name: str, symbol_count: int = 0, fields: int | None = None) -> dict | None:
+        period = _partition_date_stats(directory / name)
+        if period is None:
+            return None
+        first, last, count = period
+        item = {
+            "rows": 0, "earliest_date": first, "latest_date": last,
+            "trading_days": count, "symbols_covered": symbol_count,
+        }
+        if fields is not None:
+            item["fields"] = fields
+        return item
+
+    instruments = _safe_aggregate_instruments(repo)
+    index_instruments = _safe_aggregate_index_instruments(repo)
+    etf_instruments = _safe_aggregate_etf_instruments(repo)
+    stock_count = (instruments or {}).get("symbols_covered", 0)
+    index_count = (index_instruments or {}).get("symbols_covered", 0)
+    etf_count = (etf_instruments or {}).get("market_data_eligible", 0)
+    with _table_cache_lock:
+        adj_snapshot = _table_cache.get("adj_factor")
+        finance_snapshot = _table_cache.get("financials")
+    with _storage_lock:
+        storage_snapshot = _storage_cache
+    return {
+        "instruments": instruments,
+        "daily": partition("kline_daily", stock_count),
+        "enriched": partition(
+            "kline_daily_enriched", stock_count,
+            _enriched_column_count(directory / "kline_daily_enriched", repo, "kline_enriched"),
+        ),
+        "index_instruments": index_instruments,
+        "index_daily": partition("kline_index_daily", index_count),
+        "index_enriched": partition("kline_index_enriched", index_count),
+        "etf_instruments": etf_instruments,
+        "etf_daily": partition("kline_etf_daily", etf_count),
+        "etf_enriched": partition("kline_etf_enriched", etf_count),
+        "minute": _safe_aggregate_minute(repo),
+        "adj_factor": adj_snapshot,
+        "financials": finance_snapshot,
+        "storage": storage_snapshot,
+        "indicators_ready": getattr(request.app.state, "indicators_ready", True),
+        "partial": True,
+    }
 
 
 @router.get("/status")

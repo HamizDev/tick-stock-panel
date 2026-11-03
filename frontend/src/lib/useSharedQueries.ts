@@ -89,7 +89,8 @@ export function useDataStatus(opts?: {
   return useQuery({
     queryKey: QK.dataStatus,
     queryFn: api.dataStatus,
-    staleTime: opts?.staleTime,
+    staleTime: opts?.staleTime ?? 60_000,
     refetchInterval: opts?.refetchInterval,
+    retry: false,
   })
 }
