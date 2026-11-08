@@ -2,6 +2,8 @@
 
 # 📈 TSP · A股智能量化工作台
 
+当前版本 **v1.1.2** · [本次更新说明](docs/release-1.1.2.md) · [更新历史](CHANGELOG.md)
+
 <br/>
 
 
